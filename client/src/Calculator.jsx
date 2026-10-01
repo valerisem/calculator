@@ -180,7 +180,7 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
 
   const set1 = (k) => (e) => setInputs({ ...inputs, [k]: e.target.value });
 
-  // "Cost per video required": save to the rate card (all proposals) or to this proposal only, then re-price.
+  // Override estimated costs: save to the rate card (all proposals) or to this proposal only, then re-price.
   const enterRates = async (entries, toCard, fxPerGbp) => {
     if (toCard) {
       await Promise.all(entries.map((e) => api('/rates/card', { method: 'PUT', body: { market: e.market, platform: e.platform, size: e.size, rate: e.costPerVideo / (fxPerGbp || 1) } })));
@@ -485,7 +485,7 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
             </button>
           ) : (
             <>
-              <button className="ghost" disabled={busy || !selectedCard || selectedCard?.result?.provisional} title={selectedCard?.result?.provisional ? 'Enter the required cost per video first' : undefined} onClick={() => save(deal, { slide: true })}>
+              <button className="ghost" disabled={busy || !selectedCard} onClick={() => save(deal, { slide: true })}>
                 Download pricing slides
               </button>
               <button className="cta" disabled={busy || !savable.length} onClick={() => save(deal)}>

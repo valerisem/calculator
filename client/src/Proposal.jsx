@@ -45,7 +45,7 @@ export default function Proposal({ proposalId, meta, settings, onBack, onEdit, o
     }
   };
 
-  // "Cost per video required" on a saved package: rate card or this package only, then re-price it.
+  // Override estimated costs on a saved package: rate card or this package only, then re-price it.
   const enterRates = (p) => async (entries, toCard, fxPerGbp) => {
     if (toCard) {
       await Promise.all(entries.map((e) => api('/rates/card', { method: 'PUT', body: { market: e.market, platform: e.platform, size: e.size, rate: e.costPerVideo / (fxPerGbp || 1) } })));
@@ -106,7 +106,7 @@ export default function Proposal({ proposalId, meta, settings, onBack, onEdit, o
             <div className="actions">
               {pkg.is_approved
                 ? <button className="ghost" disabled={busy} onClick={withdraw}>Withdraw approval</button>
-                : <button className="cta" disabled={busy || pkg.result?.provisional} title={pkg.result?.provisional ? 'Enter the required cost per video first' : undefined} onClick={approve}>Approve package <span>›</span></button>}
+                : <button className="cta" disabled={busy} onClick={approve}>Approve package <span>›</span></button>}
               <button className="ghost" disabled={busy} onClick={() => onEdit(pkg)}>Adjust in calculator</button>
               <button className="ghost danger" disabled={busy} onClick={remove}>Delete</button>
             </div>

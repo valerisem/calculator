@@ -7,6 +7,7 @@ import { db, getDealOwnerPdIds, getRates, getSettings, logEvent, must, rebuildRa
 import { ADJUSTMENT_REASONS, BOOST_PLATFORMS, EXCLUSIVITY, PRICING_CONTEXTS, RECOMMENDATIONS, USAGE_RIGHTS, calculate, rateCardKey, reconcile, suggestMix } from './engine/calculator.js';
 import { calculateInWorker } from './calc-pool.js';
 import { OBJECTIVES, PLATFORMS, SIZE_BANDS } from './engine/constants.js';
+import { estimateRates } from './engine/pricing.js';
 import { CURRENCIES, getFx } from './fx.js';
 import * as pipedrive from './pipedrive.js';
 import { OUTPUTS, buildDeck } from './deck.js';
@@ -72,27 +73,24 @@ api.post('/rates/rebuild', wrap(async (req, res) => {
 }));
 
 // Rate card: the cost per video the team enters for each market × platform ×
-// size (GBP, for everyone). It is the only creator cost the calculator uses.
-// History is shown next to it as guidance only, and only where that exact
-// market + platform + size has reliable data.
+// size (GBP, for everyone). Blank sizes show the automatic estimate the
+// calculator uses instead (history, interpolated, or the size curve).
 api.get('/rates/card', wrap(async (req, res) => {
   const { market, platform } = req.query;
   if (!market || !platform) return res.status(400).json({ error: 'Choose a market and platform.' });
   const [settings, rates] = await Promise.all([getSettings(), getRates()]);
   const card = settings.planningRates || {};
-  const minN = settings.confidenceHigh ?? 10;
-  const minC = settings.minCampaigns ?? 3;
+  const est = estimateRates(rates?.archetypes || [], settings, market, platform);
   res.json({
     rows: SIZE_BANDS.map((b) => {
-      const h = (rates?.archetypes || []).find((a) => a.level === 2 && a.market === market && a.platform === platform && a.size_band === b.key);
-      const reliable = h && h.cost_p50 != null && h.n_cost >= minN && (h.n_cost_campaigns ?? 0) >= minC;
+      const entered = card[rateCardKey(market, platform, b.key)] ?? null;
+      const e = est[b.key];
       return {
         size: b.key,
         label: b.label,
-        costPerVideo: card[rateCardKey(market, platform, b.key)] ?? null,
-        historicalTypical: reliable ? Math.round(h.cost_p50) : null,
-        historicalBookings: reliable ? h.n_cost : null,
-        historicalCampaigns: reliable ? h.n_cost_campaigns : null,
+        costPerVideo: entered,
+        estimate: entered == null && e ? Math.round(e.perVideo) : null,
+        estimateBasis: entered == null && e ? e.basis : null,
       };
     }),
   });
@@ -356,8 +354,8 @@ api.put('/packages/:id', wrap(async (req, res) => {
   await writeLines(pkg.id, result);
   await touchProposal(current.proposal_id);
   await logEvent({ proposalId: current.proposal_id, packageId: pkg.id, action: 'package_updated', actor: req.user.label, payload: { version: pkg.version } });
-  // An approved package that changes is re-synced to Pipedrive (only with final pricing).
-  if (pkg.is_approved && !result.needsRates?.length) await syncToPipedrive(pkg, req.user.label);
+  // An approved package that changes is re-synced to Pipedrive.
+  if (pkg.is_approved) await syncToPipedrive(pkg, req.user.label);
   res.json(pkg);
 }));
 
@@ -369,17 +367,8 @@ api.delete('/packages/:id', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
-// A package whose creator sizes still need a cost per video has a provisional price only.
-function requireRates(pkg) {
-  const missing = pkg.result?.needsRates || [];
-  if (missing.length) {
-    throw Object.assign(new Error(`Cost per video required for ${missing.map((n) => `${n.label} (${n.platform}, ${n.market})`).join(', ')} before this package can be finalised.`), { status: 409 });
-  }
-}
-
 api.post('/packages/:id/approve', wrap(async (req, res) => {
   const pkg = await must(db().from('pc_packages').select('*').eq('id', req.params.id).single());
-  requireRates(pkg);
   await must(db().from('pc_packages').update({ is_approved: false, approved_at: null, approved_by: null }).eq('proposal_id', pkg.proposal_id).neq('id', pkg.id));
   const approved = await must(
     db().from('pc_packages').update({ is_approved: true, approved_at: new Date().toISOString(), approved_by: req.user.label })
@@ -434,7 +423,6 @@ async function touchProposal(id) {
 
 // Saves the slide options for the package and returns a short-lived download link.
 api.post('/packages/:id/slide-link', wrap(async (req, res) => {
-  requireRates(await must(db().from('pc_packages').select('result').eq('id', req.params.id).single()));
   if (req.body?.options) {
     await must(db().from('pc_packages').update({ slide_options: req.body.options }).eq('id', req.params.id));
   }
@@ -446,7 +434,6 @@ api.get('/packages/:id/slide', wrap(async (req, res) => sendSlide(req.params.id,
 
 async function sendSlide(packageId, actor, res) {
   const pkg = await must(db().from('pc_packages').select('*').eq('id', packageId).single());
-  requireRates(pkg);
   const proposal = await must(db().from('pc_proposals').select('*').eq('id', pkg.proposal_id).single());
   const settings = await getSettings();
   const options = {

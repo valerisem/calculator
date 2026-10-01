@@ -5,6 +5,7 @@ import { DEFAULT_SETTINGS } from '../server/engine/constants.js';
 import { optimise } from '../server/engine/optimiser.js';
 import { buildRateTable, normaliseMarket, pickArchetype } from '../server/engine/rates.js';
 import { simulateViews } from '../server/engine/simulate.js';
+import { estimateRates } from '../server/engine/pricing.js';
 
 // Rate card: cost per video entered by the team (GBP).
 const card = (market, f = 1) => ({
@@ -319,21 +320,51 @@ test('cost per video comes from the rate card or the proposal; a missing one is 
   const r = calculate(base, { ...rt, settings, fx });
   assert.equal(r.internal.costs.creators, 2 * 3 * 300);
   assert.equal(r.internal.tiers[0].lines[0].rateSource, 'rate card');
-  assert.equal(r.provisional, false);
+  assert.equal(r.estimatedRates.length, 0);
   // Proposal override (client currency) wins; the most specific line wins.
   const o = calculate({ ...base, currency: 'USD', rateOverrides: [{ size: 'micro_25k_50k', platform: '*', market: '*', costPerVideo: 500 }, { size: 'micro_25k_50k', platform: 'TikTok', market: 'UK', costPerVideo: 1000 }] }, { ...rt, settings, fx });
   assert.equal(o.internal.tiers[0].lines[0].rateSource, 'proposal');
   assert.equal(o.internal.costs.creators, 6000);
-  // No cost entered: still offered (provisional), flagged until entered.
+  // No cost entered: estimated automatically, never left out, overridable.
   const empty = { ...settings, planningRates: {} };
   const p = calculate(base, { ...rt, settings: empty, fx });
   assert.ok(p.ok);
-  assert.equal(p.provisional, true);
-  assert.deepEqual(p.needsRates.map((n) => n.key), ['TikTok|UK|micro_25k_50k']);
-  const b = calculate({ ...base, mode: 'budget', budget: 20000, objective: 'Performance' }, { ...rt, settings: { ...settings, planningRates: { 'UK|TikTok|micro_25k_50k': 300 } }, fx });
-  assert.ok(b.ok);
-  assert.ok(b.internal.sizes.some((z) => z.rateSource === 'required'), 'unpriced sizes stay in the options');
+  assert.equal(p.internal.tiers[0].lines[0].rateSource, 'estimated');
+  assert.ok(p.internal.costs.creators > 0);
+  assert.deepEqual(p.estimatedRates.map((n) => n.key), ['TikTok|UK|micro_25k_50k']);
   const done = calculate({ ...base, rateOverrides: [{ size: 'micro_25k_50k', platform: 'TikTok', market: 'UK', costPerVideo: 350 }] }, { ...rt, settings: empty, fx });
-  assert.equal(done.provisional, false);
+  assert.equal(done.estimatedRates.length, 0);
   assert.equal(done.internal.costs.creators, 2100);
+  // Budget mode: estimated sizes stay in the options.
+  const bud = calculate({ ...base, mode: 'budget', budget: 20000, objective: 'Performance' }, { ...rt, settings: { ...settings, planningRates: { 'UK|TikTok|micro_25k_50k': 300 } }, fx });
+  assert.ok(bud.ok);
+  assert.ok(bud.internal.sizes.some((z) => z.rateSource === 'estimated'));
+});
+
+test('estimated cost per video: history, then between priced sizes, then the size curve', () => {
+  const row = (level, size, cost, extra = {}) => ({ level, size_band: size, cost_p50: cost, n_cost: 20, n_cost_campaigns: 5, market: null, platform: null, ...extra });
+  const curve = ['nano_1k_10k', 'micro_10k_25k', 'micro_25k_50k', 'micro_50k_75k', 'micro_75k_100k', 'mid_100k_150k', 'mid_150k_250k', 'mid_250k_350k', 'macro_350k_1m', 'celebrity_1m']
+    .map((sz, i) => row(6, sz, 100 * 2 ** i)); // overall: doubles each size
+  const uk = (sz, cost, extra) => row(2, sz, cost, { market: 'UK', platform: 'TikTok', ...extra });
+  const archetypes = [
+    ...curve,
+    uk('micro_10k_25k', 300),
+    uk('mid_100k_150k', 2400),
+    uk('micro_25k_50k', 999, { n_cost_campaigns: 1 }), // thin: not used
+  ];
+  const est = estimateRates(archetypes, { ...settings, planningRates: { 'UK|TikTok|mid_250k_350k': 9000 } }, 'UK', 'TikTok');
+  assert.deepEqual(est.micro_10k_25k, { perVideo: 300, basis: 'history' });
+  assert.deepEqual(est.mid_250k_350k, { perVideo: 9000, basis: 'rate card' });
+  // Between 300 (index 1) and 2400 (index 5), proportionally: 300 × 2^(3·1/4·…)
+  assert.equal(est.micro_25k_50k.basis, 'interpolated');
+  assert.ok(Math.abs(est.micro_25k_50k.perVideo - 300 * 8 ** 0.25) < 0.01);
+  // Ends: overall curve scaled to UK TikTok (UK prices are 1.5× the curve here, 9000 is 0.7×).
+  assert.equal(est.nano_1k_10k.basis, 'curve');
+  assert.equal(est.celebrity_1m.basis, 'curve');
+  for (const e of Object.values(est)) assert.ok(e.perVideo > 0);
+  assert.equal(Object.keys(est).length, 10);
+  // A market with no local prices still gets every size, from the curve.
+  const none = estimateRates(curve, settings, 'Brazil', 'TikTok');
+  assert.equal(Object.keys(none).length, 10);
+  assert.equal(none.nano_1k_10k.perVideo, 100);
 });

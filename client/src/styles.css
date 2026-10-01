@@ -279,13 +279,15 @@ textarea.line { resize: vertical; font: inherit; font-size: 15px; }
 .rate-card td, .rate-card th { padding-top: 4px; padding-bottom: 4px; }
 .rate-card input.line { font-size: 13px; padding: 2px 0; width: 90px; }
 .rate-card .text-link.small { font-size: 11px; margin-left: 6px; }
-.rate-card input.line.missing { border-bottom-color: var(--red); }
-.badge.warn { background: var(--red-soft); color: var(--red); }
-.rates-required { margin: 10px 0 4px; padding: 10px 12px; border: 1px solid var(--red); border-radius: 10px; background: var(--red-soft); cursor: default; }
-.rates-required .rr-title { font-weight: 700; color: var(--red); margin-bottom: 6px; }
 .rr-line { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 13px; padding: 3px 0; }
 .rr-line input.line { width: 90px; font-size: 13px; }
 .rr-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 8px; flex-wrap: wrap; }
 .rr-actions .check { font-size: 12px; display: flex; gap: 6px; align-items: center; }
 .cta.small { padding: 6px 14px; font-size: 13px; }
 .table.rate-card { width: auto; } .rate-card td, .rate-card th { padding-right: 28px; }
+
+.est-tag { display: inline-block; border-radius: 999px; padding: 1px 7px; font-size: 10px; font-weight: 700; letter-spacing: .02em; background: var(--amber-soft); color: #8a6a12; }
+.rate-card input.line.est::placeholder { color: #8a6a12; opacity: .8; }
+.estimated { margin: 8px 0 2px; cursor: default; }
+.est-toggle { background: none; border: none; padding: 0; font-size: 12px; color: var(--muted); cursor: pointer; }
+.estimated .rr-line { padding-left: 2px; }

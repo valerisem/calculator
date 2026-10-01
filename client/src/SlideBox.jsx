@@ -95,7 +95,7 @@ export default function SlideBox({ pkg, settings, outputs, busy, onError, onDefa
         </>
       )}
       <div className="actions">
-        <button className="cta" disabled={busy || working || pkg.result?.provisional} title={pkg.result?.provisional ? 'Enter the required cost per video first' : undefined} onClick={download}>
+        <button className="cta" disabled={busy || working} onClick={download}>
           {working ? 'Preparing…' : isPdf ? 'Download PDF' : 'Download PowerPoint'} <span>›</span>
         </button>
         <button className="ghost" disabled={busy} onClick={saveDefault}>Save version & badge as default</button>

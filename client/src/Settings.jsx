@@ -143,8 +143,8 @@ function RateCard({ meta, inputs, onSaved }) {
                   <span className="rate-input">
                     <span className="cur">£</span>
                     <input
-                      className={`line ${r.costPerVideo == null ? 'missing' : ''}`}
-                      type="number" min="0" step="any" placeholder="Enter"
+                      className={`line ${r.costPerVideo == null ? 'est' : ''}`}
+                      type="number" min="0" step="any" placeholder={r.estimate != null ? String(r.estimate) : 'Enter'}
                       value={r.size in draft ? draft[r.size] : r.costPerVideo ?? ''}
                       onChange={(e) => setDraft({ ...draft, [r.size]: e.target.value })}
                       onBlur={() => save(r)}
@@ -152,8 +152,8 @@ function RateCard({ meta, inputs, onSaved }) {
                     />
                   </span>
                 </td>
-                <td className="muted small" title={r.historicalTypical != null ? `${r.historicalBookings} bookings / ${r.historicalCampaigns} campaigns` : undefined}>
-                  {r.historicalTypical != null ? `Historical typical: ${fmtMoney(r.historicalTypical, 'GBP')}` : ''}
+                <td className="muted small">
+                  {r.estimate != null ? <><span className="est-tag">Estimated</span> {r.estimateBasis === 'history' ? 'from history' : r.estimateBasis === 'interpolated' ? 'between priced sizes' : 'from size curve'}</> : ''}
                 </td>
               </tr>
             ))}
@@ -172,7 +172,7 @@ export function HowItWorks({ v }) {
         <div className="formula">Planned creator cost = creators × videos per creator × cost per video × (1 + usage/exclusivity uplift %)</div>
         <dl>
           <dt>Cost per video</dt>
-          <dd>Entered by the team in the rate card for each market, platform and creator size, or for one proposal only. A size with no cost can still be picked, but the package is provisional until a cost is entered.</dd>
+          <dd>In order: this proposal's override, the rate card, then an automatic estimate (labelled Estimated): the typical historical cost for that market, platform and size; otherwise in proportion between the nearest priced sizes; otherwise the overall size-to-size price curve scaled to this market and platform. Every size always has a cost and can be overridden.</dd>
           <dt>Usage / exclusivity uplift</dt>
           <dd>Entered on each proposal when anything beyond organic-only and no exclusivity is chosen. No default.</dd>
         </dl>

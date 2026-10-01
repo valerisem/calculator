@@ -45,9 +45,8 @@ export default function PackageCard({ title, priceLabel, result, selected, onSel
         <span className={`radio ${selected ? 'on' : ''}`} />
         <h3>{title}</h3>
         {badge && <span className="badge">{badge}</span>}
-        {result.provisional && <span className="badge warn">Provisional price</span>}
       </div>
-      {result.needsRates?.length > 0 && <RatesRequired result={result} onEnterRates={onEnterRates} />}
+      {result.estimatedRates?.length > 0 && <EstimatedRates result={result} onEnterRates={onEnterRates} />}
 
       {view === 'client' ? (
         <>
@@ -104,42 +103,53 @@ export default function PackageCard({ title, priceLabel, result, selected, onSel
   );
 }
 
+export const BASIS = { history: 'from history', interpolated: 'between priced sizes', curve: 'from size curve' };
+export const sourceLabel = (src, basis) => (src === 'estimated' ? `Estimated${BASIS[basis] ? ` · ${BASIS[basis]}` : ''}` : src);
+
 /**
- * "Cost per video required": the optimiser picked sizes with no cost entered.
- * Entering them re-prices the package; they can also be saved to the rate card.
+ * Sizes in this package priced by the automatic estimate. Sales can override
+ * any of them for this proposal, or save them to the rate card.
  */
-function RatesRequired({ result, onEnterRates }) {
+function EstimatedRates({ result, onEnterRates }) {
+  const [open, setOpen] = useState(false);
   const [vals, setVals] = useState({});
-  const [toCard, setToCard] = useState(true);
+  const [toCard, setToCard] = useState(false);
   const [busy, setBusy] = useState(false);
   const cur = result.currency;
-  const ready = result.needsRates.every((n) => Number(vals[n.key]) > 0);
+  const entered = result.estimatedRates.filter((n) => Number(vals[n.key]) > 0);
   const apply = async () => {
     setBusy(true);
     try {
-      await onEnterRates(result.needsRates.map((n) => ({ ...n, costPerVideo: Number(vals[n.key]) })), toCard, result.fxPerGbp);
+      await onEnterRates(entered.map((n) => ({ ...n, costPerVideo: Number(vals[n.key]) })), toCard, result.fxPerGbp);
       setVals({});
+      setOpen(false);
     } finally {
       setBusy(false);
     }
   };
   return (
-    <div className="rates-required" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-      <div className="rr-title">Cost per video required</div>
-      {result.needsRates.map((n) => (
-        <label className="rr-line" key={n.key}>
-          <span>{n.label} · {n.platform} · {n.market}</span>
-          <span className="rate-input">
-            <span className="cur">{cur}</span>
-            <input className="line" type="number" min="0" step="any" value={vals[n.key] ?? ''} onChange={(e) => setVals({ ...vals, [n.key]: e.target.value })} onKeyDown={(e) => e.key === 'Enter' && ready && apply()} />
-          </span>
-        </label>
-      ))}
-      {onEnterRates && (
-        <div className="rr-actions">
-          <label className="check"><input type="checkbox" checked={toCard} onChange={(e) => setToCard(e.target.checked)} /> Save to rate card for future proposals</label>
-          <button className="cta small" disabled={!ready || busy} onClick={apply}>Apply</button>
-        </div>
+    <div className="estimated" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+      <button className="est-toggle" onClick={() => setOpen(!open)}>
+        <span className="est-tag">Estimated</span> cost per video for {result.estimatedRates.length} size{result.estimatedRates.length === 1 ? '' : 's'} · {open ? 'Hide' : 'Review'}
+      </button>
+      {open && (
+        <>
+          {result.estimatedRates.map((n) => (
+            <label className="rr-line" key={n.key}>
+              <span>{n.label} · {n.platform} · {n.market}<span className="muted small"> · {BASIS[n.basis] || 'estimated'}</span></span>
+              <span className="rate-input">
+                <span className="cur">{cur}</span>
+                <input className="line" type="number" min="0" step="any" placeholder={String(Math.round(n.perVideo))} value={vals[n.key] ?? ''} onChange={(e) => setVals({ ...vals, [n.key]: e.target.value })} onKeyDown={(e) => e.key === 'Enter' && entered.length && apply()} />
+              </span>
+            </label>
+          ))}
+          {onEnterRates && (
+            <div className="rr-actions">
+              <label className="check"><input type="checkbox" checked={toCard} onChange={(e) => setToCard(e.target.checked)} /> Also save to rate card</label>
+              <button className="cta small" disabled={!entered.length || busy} onClick={apply}>Apply</button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -181,7 +191,7 @@ export function PackageDetails({ result }) {
                   <td>{fmtInt(l.creators)}</td><td>{fmtInt(l.videos)}</td>
                   <td>
                     {fmtMoney(l.costPerVideo, cur)}
-                    <div className={l.rateSource === 'required' ? 'thin' : 'muted'}>{l.rateSource === 'required' ? 'required (provisional)' : l.rateSource}</div>
+                    <div className="muted">{sourceLabel(l.rateSource, l.estimateBasis)}</div>
                   </td>
                   <td>{fmtMoney(l.creatorCost, cur)}</td>
                   <td>{fmtInt(l.viewsPerVideoP25)} · {fmtInt(l.viewsPerVideoP50)}</td>
@@ -243,7 +253,7 @@ export function PackageDetails({ result }) {
           {i.sizes.filter((s) => s.used).map((s) => (
             <tr key={s.key}>
               <td>{s.label}<div className="muted">{s.platform} · {s.market}</div></td>
-              <td>{fmtMoney(s.costPerVideo, cur)}<div className={s.rateSource === 'required' ? 'thin' : 'muted'}>{s.rateSource === 'required' ? 'required (provisional)' : s.rateSource}</div></td>
+              <td>{fmtMoney(s.costPerVideo, cur)}<div className="muted">{sourceLabel(s.rateSource, s.estimateBasis)}</div></td>
               <td><span className={`conf ${s.viewsThin ? 'low' : 'high'}`}>{s.viewsThin ? 'Thin' : 'Reliable'}</span> <span className="muted">{s.viewsRecords} / {s.viewsCampaigns ?? '–'} campaigns · {s.viewsLevel}</span></td>
               <td>{fmtInt(s.viewsP25)} · {fmtInt(s.viewsP50)} · {fmtInt(s.viewsP75)}</td>
             </tr>

@@ -1,6 +1,7 @@
 import { NANO_KEY, PLATFORMS, SIZE_BANDS, SIZE_BY_KEY } from './constants.js';
 import { optimise } from './optimiser.js';
-import { pickArchetype, pickViewsRow } from './rates.js';
+import { estimateRates } from './pricing.js';
+import { pickViewsRow } from './rates.js';
 import { hashString } from './stats.js';
 import { simulateViews } from './simulate.js';
 
@@ -173,13 +174,13 @@ export function calculate(rawInputs, ctx) {
   }
   const uplift = needsUplift ? inp.usage.upliftPct / 100 : 0;
 
-  // Cost per video: entered by the team (rate card, or this proposal's override).
-  // A size without one is still offered at a provisional cost (historical
-  // typical) so the options aren't narrowed, but a package using it is flagged
-  // "cost per video required" and can't be finalised until a cost is entered.
+  // Cost per video, in order: this proposal's override, the rate card, then
+  // an automatic estimate (labelled Estimated) so every size is always priced.
   // Views per video: historical, from the most specific reliable level.
   const minSample = settings.guaranteeMinSample || 10;
   const combos = {};
+  const estimates = {};
+  const estimateFor = (market, platform) => (estimates[`${market}|${platform}`] ??= estimateRates(archetypes, settings, market, platform));
   const rateFor = (platform, market, size) => {
     const key = comboKey(platform, market, size);
     if (!(key in combos)) {
@@ -187,10 +188,8 @@ export function calculate(rawInputs, ctx) {
       const q = { market, platform, niche: inp.niche, size };
       const vrow = pickViewsRow(archetypes, q, minSample, settings.minCampaigns ?? 3);
       const own = proposalRate(inp.rateOverrides, { platform, market, size });
-      const card = Number(settings.planningRates?.[rateCardKey(market, platform, size)]);
-      const entered = own != null ? toGbp(own) : card > 0 ? card : null;
-      const provisional = entered == null ? pickArchetype(archetypes, q, settings)?.cost_p50 ?? null : null;
-      const perVideo = entered ?? provisional;
+      const est = own == null ? estimateFor(market, platform)[size] : null;
+      const perVideo = own != null ? toGbp(own) : est?.perVideo ?? null;
       combos[key] = vrow && perVideo != null ? {
         key,
         size,
@@ -199,7 +198,8 @@ export function calculate(rawInputs, ctx) {
         label: band.label,
         tier: band.tier,
         big: !!band.big,
-        rateSource: own != null ? 'proposal' : entered != null ? 'rate card' : 'required',
+        rateSource: own != null ? 'proposal' : est.basis === 'rate card' ? 'rate card' : 'estimated',
+        estimateBasis: own == null && est.basis !== 'rate card' ? est.basis : null,
         costPerVideoGbp: perVideo * (1 + uplift), // with usage uplift
         viewsLevel: vrow.levelLabel,
         viewsRecords: vrow.n_views,
@@ -394,6 +394,7 @@ export function calculate(rawInputs, ctx) {
     videos: l.count * v,
     costPerVideo: round2(fromGbp(l.costPerVideoGbp)),
     rateSource: l.rateSource,
+    estimateBasis: l.estimateBasis,
     creatorCost: round2(fromGbp(l.count * l.packageCostGbp)),
     viewsPerVideoP25: Math.round(l.viewsP25),
     viewsPerVideoP50: Math.round(l.viewsP50),
@@ -447,16 +448,15 @@ export function calculate(rawInputs, ctx) {
     };
   });
 
-  // Sizes in this package that still need a cost per video: the price is provisional until entered.
-  const needsRates = lines
-    .filter((l) => l.rateSource === 'required')
-    .map((l) => ({ key: l.key, size: l.size, label: l.label, platform: l.platform, market: l.market, provisionalPerVideo: round2(fromGbp(l.costPerVideoGbp / (1 + uplift))) }));
+  // Sizes priced by the automatic estimate: Sales can override them.
+  const estimatedRates = lines
+    .filter((l) => l.rateSource === 'estimated')
+    .map((l) => ({ key: l.key, size: l.size, label: l.label, platform: l.platform, market: l.market, basis: l.estimateBasis, perVideo: round2(fromGbp(l.costPerVideoGbp / (1 + uplift))) }));
 
   return {
     ok: true,
     mode: inp.mode,
-    needsRates,
-    provisional: needsRates.length > 0,
+    estimatedRates,
     inputs: inp,
     currency: inp.currency,
     fxPerGbp: rate,
@@ -521,6 +521,7 @@ export function calculate(rawInputs, ctx) {
         market: s.market,
         costPerVideo: round2(fromGbp(s.costPerVideoGbp)),
         rateSource: s.rateSource,
+        estimateBasis: s.estimateBasis,
         packageCost: round2(fromGbp(s.packageCostGbp)),
         viewsLevel: s.viewsLevel,
         viewsRecords: s.viewsRecords,
