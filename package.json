@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Monday board view: creator package pricing calculator for the sales team (Pipedrive + Supabase).",
-  "engines": { "node": ">=20" },
+  "engines": { "node": "22.x" },
   "scripts": {
     "dev": "concurrently -k \"node --watch server/index.js\" \"vite\"",
     "build": "vite build",
