@@ -74,6 +74,16 @@ function shiftShapes(xml, ids, dy, dh = 0) {
   });
 }
 
+// Moves shapes horizontally by dx EMU.
+function shiftShapesX(xml, ids, dx) {
+  const set = new Set(ids.map(String));
+  return xml.replace(/<p:(sp|pic)>[\s\S]*?<\/p:\1>/g, (m) => {
+    const id = m.match(/<p:cNvPr id="(\d+)"/)?.[1];
+    if (!set.has(id)) return m;
+    return m.replace(/<a:off x="(\d+)" y="(\d+)"\/>/, (_, x, y) => `<a:off x="${Math.max(0, Number(x) + dx)}" y="${y}"/>`);
+  });
+}
+
 const shapeY = (xml, id) => Number(xml.match(new RegExp(`<p:cNvPr id="${id}"[\\s\\S]*?<a:off x="\\d+" y="(\\d+)"`))?.[1] || 0);
 
 // ---- content from the package ------------------------------------------------
@@ -225,6 +235,13 @@ function fillPricing(x, { c, i, inp, cur, price, cpv, ecpm, options }) {
   x = setText(x, '[INFLUENCER CAMPAIGN & GIFTING]', c.giftedCreators > 0 ? 'INFLUENCER CAMPAIGN & GIFTING' : 'INFLUENCER CAMPAIGN');
   x = setText(x, '[MOST POPULAR]', (options.badge || 'Most popular').toUpperCase());
   x = setText(x, '€[30,000]', money(price, cur));
+  // Put "/ campaign" right after the price. Measured on the rendered slide: digits and
+  // currency signs are about 0.31 in wide in the price font, commas about 0.12 in.
+  const priceText = money(price, cur);
+  const priceWidth = [...priceText].reduce((w, ch) => w + (/[,.]/.test(ch) ? 0.12 : ch === ' ' ? 0.12 : 0.31), 0);
+  const priceLeft = Number(x.match(/<p:cNvPr id="8"[\s\S]*?<a:off x="(\d+)"/)?.[1] || 0);
+  const labelLeft = Number(x.match(/<p:cNvPr id="9"[\s\S]*?<a:off x="(\d+)"/)?.[1] || 0);
+  x = shiftShapesX(x, [9], Math.round(priceLeft + (priceWidth + 0.15) * 914400 - labelLeft));
   const markets = (inp.markets || []).join(', ');
   const platforms = (inp.platforms || []).join(' & ');
   x = setText(x, '[One line on the campaign goal and audience]', options.oneLine || [platforms, markets, inp.niche].filter(Boolean).join(' · '));
