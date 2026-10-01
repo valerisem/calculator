@@ -5,7 +5,7 @@ const fmtCur = (n, cur) => new Intl.NumberFormat('en-GB', { style: 'currency', c
 const EXCLUSIVITY_LABELS = { none: 'None', category: 'Category', competitor: 'Competitor restriction' };
 
 // Add-ons & media: boosting (per platform), paid media, gifting, usage rights, other direct costs.
-export default function AddOns({ meta, inputs, setInputs }) {
+export default function AddOns({ meta, inputs, setInputs, sizes = [] }) {
   const cur = inputs.currency;
   const settings = { ...meta.settings, ...(inputs.settings || {}) };
   const boosts = inputs.boostingLines || [];
@@ -24,6 +24,20 @@ export default function AddOns({ meta, inputs, setInputs }) {
   const giftPosts = Math.floor(giftN * giftRate);
   const giftCost = giftN * ((Number(gift.productCost) || 0) + (Number(gift.shippingCost) || 0));
   const giftCostMissing = giftN > 0 && (gift.productCost === '' || gift.productCost == null) && (gift.shippingCost === '' || gift.shippingCost == null);
+  const rates = inputs.rateOverrides || [];
+  const setRate = (i, patch) => setInputs({ ...inputs, rateOverrides: rates.map((r, j) => (j === i ? { ...r, ...patch } : r)) });
+  const addRate = () => setInputs({ ...inputs, rateOverrides: [...rates, { platform: '*', market: '*', size: 'micro_25k_50k', costPerVideo: '' }] });
+  // Current cost per video for the matching creator types (before usage uplift), for reference.
+  const upliftF = 1 + (Number(usage.upliftPct) || 0) / 100;
+  const refFor = (r) => {
+    const xs = sizes
+      .filter((z) => z.size === r.size && (r.platform === '*' || z.platform === r.platform) && (r.market === '*' || z.market === r.market))
+      .map((z) => z.historicalPerVideo / upliftF);
+    if (!xs.length) return null;
+    const lo = Math.min(...xs);
+    const hi = Math.max(...xs);
+    return Math.round(lo) === Math.round(hi) ? fmtCur(lo, cur) : `${fmtCur(lo, cur)}–${fmtCur(hi, cur)}`;
+  };
   const set1 = (k) => (e) => setInputs({ ...inputs, [k]: e.target.value });
 
   return (
@@ -148,6 +162,41 @@ export default function AddOns({ meta, inputs, setInputs }) {
             </p>
           </div>
         )}
+      </div>
+
+      <div className="addon">
+        <div className="addon-head">
+          <h3>Creator rates for this proposal</h3>
+          <button className="text-link" onClick={addRate}>+ Override a size</button>
+        </div>
+        {rates.map((r, i) => (
+          <div className="row3 rate-line" key={i}>
+            <label className="field">
+              <span>Size</span>
+              <select className="line" value={r.size} onChange={(e) => setRate(i, { size: e.target.value })}>
+                {meta.sizes.map((z) => <option key={z.key} value={z.key}>{z.label}</option>)}
+              </select>
+            </label>
+            <label className="field">
+              <span>Platform · market</span>
+              <div className="pair">
+                <select className="line" value={r.platform} onChange={(e) => setRate(i, { platform: e.target.value })}>
+                  <option value="*">All</option>
+                  {(inputs.platforms || []).map((p) => <option key={p}>{p}</option>)}
+                </select>
+                <select className="line" value={r.market} onChange={(e) => setRate(i, { market: e.target.value })}>
+                  <option value="*">All</option>
+                  {(inputs.markets || []).map((m) => <option key={m}>{m}</option>)}
+                </select>
+              </div>
+            </label>
+            <label className="field">
+              <span>Cost / video, {cur}{refFor(r) ? ` (now ${refFor(r)})` : ''}</span>
+              <input className="line" type="number" min="0" step="any" value={r.costPerVideo ?? ''} onChange={(e) => setRate(i, { costPerVideo: e.target.value })} />
+            </label>
+            <button className="icon" aria-label="Remove rate override" onClick={() => setInputs({ ...inputs, rateOverrides: rates.filter((_, j) => j !== i) })}>×</button>
+          </div>
+        ))}
       </div>
 
       <div className="addon">

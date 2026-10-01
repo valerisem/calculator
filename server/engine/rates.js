@@ -160,23 +160,29 @@ export function confidenceFor(n, settings) {
   return 'Low';
 }
 
-// F(v) = median cost per video at v videos ÷ median cost per video at 1 video,
-// within the size band. 1.0 unless both groups have enough records.
+// F(v) = median cost per video at v videos ÷ median cost per video over all
+// bookings in the size band. The planning cost (P65) is already taken over all
+// bookings, whatever their video count, so F is measured against the same base;
+// measuring it against 1-video bookings would count the multi-video discount
+// twice. 1.0 unless the v-video group has enough records. v videos never cost
+// less than one video at the base rate (F(v) ≥ 1/v).
 function multiVideoFactors(records, settings) {
   const out = {};
   for (const band of SIZE_BANDS) {
+    const all = [];
     const byV = new Map();
     for (const r of records) {
       if (r.size !== band.key || !r.costPerVideo) continue;
+      all.push(r.costPerVideo);
       if (!byV.has(r.videos)) byV.set(r.videos, []);
       byV.get(r.videos).push(r.costPerVideo);
     }
-    const one = byV.get(1) || [];
     const factors = {};
-    for (const [v, costs] of byV) {
-      if (v === 1) continue;
-      if (one.length >= settings.confidenceHigh && costs.length >= settings.confidenceHigh) {
-        factors[v] = { factor: median(costs) / median(one), n: costs.length };
+    if (all.length >= settings.confidenceHigh) {
+      const base = median(all);
+      for (const [v, costs] of byV) {
+        if (costs.length < settings.confidenceHigh) continue;
+        factors[v] = { factor: Math.max(1 / v, median(costs) / base), n: costs.length };
       }
     }
     out[band.key] = factors;
@@ -185,8 +191,8 @@ function multiVideoFactors(records, settings) {
 }
 
 export function multiVideoFactor(factors, size, v) {
-  if (v === 1) return 1;
-  return factors?.[size]?.[v]?.factor ?? 1;
+  const f = factors?.[size]?.[v]?.factor ?? 1;
+  return Math.max(1 / v, f);
 }
 
 // ---- lookup --------------------------------------------------------------

@@ -4,9 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { requireMonday, signDownload, verifyDownload } from './auth.js';
 import { config } from './config.js';
 import { db, getDealOwnerPdIds, getRates, getSettings, logEvent, must, rebuildRates, saveSettings, supabase } from './db.js';
-import { ADJUSTMENT_REASONS, BOOST_PLATFORMS, EXCLUSIVITY, PRICING_CONTEXTS, RECOMMENDATIONS, USAGE_RIGHTS, calculate, suggestMix } from './engine/calculator.js';
+import { ADJUSTMENT_REASONS, BOOST_PLATFORMS, EXCLUSIVITY, PRICING_CONTEXTS, RECOMMENDATIONS, USAGE_RIGHTS, calculate, rateCardKey, reconcile, suggestMix } from './engine/calculator.js';
 import { calculateInWorker } from './calc-pool.js';
 import { OBJECTIVES, PLATFORMS, SIZE_BANDS } from './engine/constants.js';
+import { pickArchetype } from './engine/rates.js';
 import { CURRENCIES, getFx } from './fx.js';
 import * as pipedrive from './pipedrive.js';
 import { OUTPUTS, buildDeck } from './deck.js';
@@ -69,6 +70,50 @@ api.post('/rates/rebuild', wrap(async (req, res) => {
   const out = await rebuildRates(req.user.label);
   await logEvent({ action: 'rates_rebuilt', actor: req.user.label, payload: out });
   res.json(out);
+}));
+
+// Rate card: historical P65 per video (read-only, from the rate table with the
+// usual fallback) next to the editable planning rate, per market × platform ×
+// vertical × size. Planning rates are in GBP per video and apply to everyone.
+api.get('/rates/card', wrap(async (req, res) => {
+  const { market, platform, niche = '' } = req.query;
+  if (!market || !platform) return res.status(400).json({ error: 'Choose a market and platform.' });
+  const [settings, rates] = await Promise.all([getSettings(), getRates()]);
+  const card = settings.planningRates || {};
+  res.json({
+    rows: SIZE_BANDS.map((b) => {
+      const row = pickArchetype(rates?.archetypes || [], { market, platform, niche: niche || null, size: b.key });
+      const key = rateCardKey(market, platform, niche, b.key);
+      return {
+        size: b.key,
+        label: b.label,
+        tier: b.tier,
+        historicalP65: row?.cost_p65 == null ? null : Math.round(row.cost_p65 * 100) / 100,
+        historicalP50: row?.cost_p50 == null ? null : Math.round(row.cost_p50 * 100) / 100,
+        level: row?.levelLabel ?? null,
+        records: row?.n_cost ?? 0,
+        campaigns: row?.n_campaigns ?? null,
+        planningRate: card[key] ?? null,
+      };
+    }),
+    saved: Object.entries(card).map(([key, rate]) => {
+      const [m, p, n, size] = key.split('|');
+      return { market: m, platform: p, niche: n, size, rate };
+    }),
+  });
+}));
+
+api.put('/rates/card', wrap(async (req, res) => {
+  const { market, platform, niche = '', size, rate } = req.body || {};
+  if (!market || !PLATFORMS.includes(platform) || !SIZE_BANDS.some((b) => b.key === size)) {
+    return res.status(400).json({ error: 'Market, platform and size are required.' });
+  }
+  const card = { ...((await getSettings()).planningRates || {}) };
+  const key = rateCardKey(market, platform, niche, size);
+  if (rate === null || rate === '' || !(Number(rate) > 0)) delete card[key];
+  else card[key] = Math.round(Number(rate) * 100) / 100;
+  await saveSettings({ planningRates: card }, req.user.label);
+  res.json({ ok: true, planningRates: card });
 }));
 
 api.get('/settings', wrap(async (_req, res) => res.json(await getSettings())));
@@ -192,7 +237,7 @@ api.post('/calculate', wrap(async (req, res) => {
   const raw = req.body?.inputs || {};
   const { ctx, buildId } = await calcContext(raw);
   const { campaign, ...priced } = raw; // the campaign name doesn't change the numbers
-  const key = JSON.stringify([buildId, ctx.fx, priced]);
+  const key = JSON.stringify([buildId, ctx.fx, ctx.settings, priced]); // a rate card or settings change re-prices
   if (calcCache.has(key)) return res.json(calcCache.get(key));
   const hasCreators = Object.values(raw.package || {}).some((n) => Number(n) > 0);
   const budget = Number(raw.budget) > 0;
@@ -204,7 +249,7 @@ api.post('/calculate', wrap(async (req, res) => {
         )
       : []),
   ]);
-  const set = { ok: true, yours, recommended };
+  const set = { ok: true, yours, recommended: reconcile(recommended) };
   calcCache.set(key, set);
   if (calcCache.size > CACHE_SIZE) calcCache.delete(calcCache.keys().next().value);
   res.json(set);

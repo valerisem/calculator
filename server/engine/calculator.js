@@ -2,7 +2,7 @@ import { NANO_KEY, PLATFORMS, SIZE_BANDS, SIZE_BY_KEY } from './constants.js';
 import { optimise } from './optimiser.js';
 import { multiVideoFactor, pickArchetype, pickViewsRow } from './rates.js';
 import { hashString } from './stats.js';
-import { simulateViews } from './simulate.js';
+import { fitLogNormal, simulateViews } from './simulate.js';
 
 const num = (v, d = 0) => (v === '' || v == null || Number.isNaN(Number(v)) ? d : Number(v));
 const optNum = (v) => (v === '' || v == null || Number.isNaN(Number(v)) ? null : Number(v));
@@ -123,6 +123,16 @@ export function normaliseInputs(raw, settings) {
     maxBigCreators: optNum(raw.maxBigCreators),
     allowedSizes: allowed,
     package: pkg,
+    // Proposal-only creator cost per video (client currency, before usage uplift).
+    // platform / market '*' = all of them.
+    rateOverrides: (Array.isArray(raw.rateOverrides) ? raw.rateOverrides : [])
+      .map((o) => ({
+        platform: PLATFORMS.includes(o.platform) ? o.platform : '*',
+        market: o.market && o.market !== '*' ? o.market : '*',
+        size: o.size,
+        costPerVideo: optNum(o.costPerVideo),
+      }))
+      .filter((o) => SIZE_BY_KEY[o.size] && o.costPerVideo > 0),
     settings: raw.settings && typeof raw.settings === 'object' ? raw.settings : undefined,
   };
 }
@@ -174,7 +184,19 @@ export function calculate(rawInputs, ctx) {
       const row = pickArchetype(archetypes, q);
       const vrow = row && pickViewsRow(archetypes, q, minSample);
       const F = multiVideoFactor(factors, size, v);
-      combos[key] = row && vrow ? {
+      if (!row || !vrow) {
+        combos[key] = null;
+        return null;
+      }
+      // Cost per video at this many videos: historical P65 × F, unless the rate
+      // card (Settings) or this proposal sets a planning rate.
+      const historical = row.cost_p65 * F;
+      const card = planningRate(settings.planningRates, { market, platform, niche: inp.niche, size });
+      const own = proposalRate(inp.rateOverrides, { platform, market, size });
+      const perVideo = own != null ? toGbp(own) : card != null ? card * F : historical;
+      const source = own != null ? 'proposal' : card != null ? 'rate card' : 'historical';
+      const scale = historical > 0 ? perVideo / historical : 1; // moves P50 / P80 with the planning rate
+      combos[key] = {
         key,
         size,
         platform,
@@ -187,9 +209,12 @@ export function calculate(rawInputs, ctx) {
         levelLabel: row.levelLabel,
         lowFallback: row.lowFallback,
         records: Math.min(row.n_cost, row.n_views),
-        costP50: row.cost_p50 * (1 + uplift),
-        costP65: row.cost_p65 * (1 + uplift),
-        costP80: row.cost_p80 == null ? null : row.cost_p80 * (1 + uplift),
+        // per video at v videos, with usage uplift
+        historicalPerVideo: historical * (1 + uplift),
+        rateSource: source,
+        costP50: row.cost_p50 * F * scale * (1 + uplift),
+        costP65: perVideo * (1 + uplift),
+        costP80: row.cost_p80 == null ? null : row.cost_p80 * F * scale * (1 + uplift),
         campaigns: row.n_campaigns ?? null,
         viewsLevel: vrow.levelLabel,
         viewsRecords: vrow.n_views,
@@ -198,9 +223,9 @@ export function calculate(rawInputs, ctx) {
         viewsP50: vrow.views_p50,
         viewsP75: vrow.views_p75,
         factor: F,
-        packageCostGbp: v * row.cost_p65 * (1 + uplift) * F,
+        packageCostGbp: v * perVideo * (1 + uplift),
         packageViewsP25: v * vrow.views_p25,
-      } : null;
+      };
     }
     return combos[key];
   };
@@ -237,6 +262,17 @@ export function calculate(rawInputs, ctx) {
   const feesGbp = pmFeeGbp + boostFeesGbp; // management fees (revenue)
   const giftedPosts = Math.floor(gifted * postingRate);
 
+  // Simulation set-up, shared by the optimiser (Most views) and the results.
+  const nano = gifted > 0 ? rateFor(inp.platforms[0], inp.markets[0], NANO_KEY) : null;
+  if (gifted > 0 && !nano) warnings.push('No nano-size rate data, so gifted posts add no views.');
+  const groupOf = (l) => ({ count: l.count, videos: v, p25: l.viewsP25, p50: l.viewsP50, p75: l.viewsP75 });
+  const giftedGroup = nano ? { count: gifted, postingRate, p25: nano.viewsP25, p50: nano.viewsP50, p75: nano.viewsP75 } : null;
+  const seedOf = (c) => hashString(JSON.stringify([c, v, gifted, postingRate, inp.niche]));
+  const runs = settings.simulationRuns;
+  const pctl = settings.promisePercentile;
+  const guaranteeOf = (c, n = runs) =>
+    simulateViews(Object.entries(c).map(([k, m]) => groupOf({ ...combos[k], count: m })), giftedGroup, { runs: n, seed: seedOf(c) }).percentile(pctl);
+
   let counts;
   let standardGbp;
   let creatorMoneyGbp;
@@ -252,18 +288,23 @@ export function calculate(rawInputs, ctx) {
       for (const platform of inp.platforms) {
         for (const market of inp.markets) {
           const r = rateFor(platform, market, size);
-          if (r) options.push({ key: r.key, group: size, cost: r.packageCostGbp, views: r.packageViewsP25, big: r.big });
+          if (!r) continue;
+          // Log-normal views per creator (v videos): mean and variance, for Most views.
+          const { mu, sigma } = fitLogNormal({ p25: r.viewsP25, p50: r.viewsP50, p75: r.viewsP75 });
+          const mean = v * Math.exp(mu + (sigma * sigma) / 2);
+          const variance = v * v * (Math.exp(sigma * sigma) - 1) * Math.exp(2 * mu + sigma * sigma);
+          options.push({ key: r.key, group: size, cost: r.packageCostGbp, views: r.packageViewsP25, p50: r.viewsP50, p75: r.viewsP75, mean, variance, big: r.big });
         }
       }
     }
-    // Within a size, drop a creator type another one beats on both cost and views.
+    // Within a size, drop a creator type another one beats on cost and on views at P25, P50 and P75.
+    const beats = (q, o) => q.cost <= o.cost && q.views >= o.views && q.p50 >= o.p50 && q.p75 >= o.p75;
     options = options.filter(
-      (o) => !options.some((q) => q !== o && q.group === o.group && q.cost <= o.cost && q.views >= o.views && (q.cost < o.cost || q.views > o.views || q.key < o.key)),
+      (o) => !options.some((q) => q !== o && q.group === o.group && beats(q, o) && (!beats(o, q) || q.key < o.key)),
     );
     if (!options.length) return fail('No rate data for the allowed sizes in these markets.');
     const minFromVideos = inp.requiredVideos ? Math.ceil(Math.max(0, inp.requiredVideos - giftedPosts) / v) : 0;
-    const res = optimise({
-      options,
+    const params = {
       creatorMoney: creatorMoneyGbp,
       objective: inp.objective,
       step: settings.optimiserStepGbp,
@@ -272,7 +313,9 @@ export function calculate(rawInputs, ctx) {
       maxBig: inp.maxBigCreators,
       sizeBonus: settings.balancedSizeBonus,
       creatorBonus: settings.balancedCreatorBonus,
-    });
+    };
+    let res = optimise({ ...params, options });
+    if (res.feasible && inp.objective === 'Performance') res = mostViews(options, params, res, guaranteeOf);
     if (!res.feasible) return fail(res.reason);
     counts = res.counts;
     optimiserStep = res.step;
@@ -333,14 +376,9 @@ export function calculate(rawInputs, ctx) {
   const adjusted = Math.abs(finalPrice - standard) >= 1;
 
   // Section 4, step 4: simulation, overall and per tier.
-  const nano = gifted > 0 ? rateFor(inp.platforms[0], inp.markets[0], NANO_KEY) : null;
-  if (gifted > 0 && !nano) warnings.push('No nano-size rate data, so gifted posts add no views.');
-  const groupOf = (l) => ({ count: l.count, videos: v, p25: l.viewsP25, p50: l.viewsP50, p75: l.viewsP75 });
-  const giftedGroup = nano ? { count: gifted, postingRate, p25: nano.viewsP25, p50: nano.viewsP50, p75: nano.viewsP75 } : null;
-  const seed = hashString(JSON.stringify([counts, v, gifted, postingRate, inp.niche]));
-  const runs = settings.simulationRuns;
-  const sim = simulateViews(lines.map(groupOf), giftedGroup, { runs, seed });
-  const pctl = settings.promisePercentile;
+  // Same groups, order and seed as the optimiser's evaluation, so Most views reports what it chose on.
+  const seed = seedOf(counts);
+  const sim = simulateViews(Object.entries(counts).map(([k, m]) => groupOf({ ...combos[k], count: m })), giftedGroup, { runs, seed });
   const viewsPromised = Math.floor(sim.percentile(pctl) / 10_000) * 10_000;
   const roundTier = (x) => (x >= 100_000 ? Math.floor(x / 10_000) * 10_000 : Math.floor(x / 1_000) * 1_000);
   const tierSummary = (tier, creators, videos, ts) => ({
@@ -352,10 +390,34 @@ export function calculate(rawInputs, ctx) {
     likely: Math.round(ts.p50),
     high: Math.round(ts.p75),
   });
+  // Audit trail per creator type: what each line costs and why.
+  const lineAudit = (l) => ({
+    key: l.key,
+    label: l.label,
+    platform: l.platform,
+    market: l.market,
+    creators: l.count,
+    videos: l.count * v,
+    costPerVideo: round2(fromGbp(l.costP65)),
+    historicalPerVideo: round2(fromGbp(l.historicalPerVideo)),
+    rateSource: l.rateSource,
+    multiVideoFactor: round4(l.factor),
+    costLevel: l.levelLabel,
+    costRecords: l.records,
+    campaigns: l.campaigns,
+    creatorCost: round2(fromGbp(l.count * l.packageCostGbp)),
+    viewsPerVideoP25: Math.round(l.viewsP25),
+    viewsPerVideoP50: Math.round(l.viewsP50),
+    viewsLevel: l.viewsLevel,
+  });
   const tiers = [...new Set(lines.map((l) => l.tier))].map((tier, i) => {
     const tl = lines.filter((l) => l.tier === tier);
     const creators = tl.reduce((s, l) => s + l.count, 0);
-    return tierSummary(tier, creators, creators * v, simulateViews(tl.map(groupOf), null, { runs, seed: seed + i + 1 }));
+    return {
+      ...tierSummary(tier, creators, creators * v, simulateViews(tl.map(groupOf), null, { runs, seed: seed + i + 1 })),
+      creatorCost: round2(fromGbp(tl.reduce((s, l) => s + l.count * l.packageCostGbp, 0))),
+      lines: tl.map(lineAudit),
+    };
   });
   if (giftedGroup && gifted > 0) {
     tiers.push(tierSummary('Gifted', gifted, giftedPosts, simulateViews([], giftedGroup, { runs, seed: seed + 99 })));
@@ -389,9 +451,9 @@ export function calculate(rawInputs, ctx) {
       videos: v,
       firstOfferPerVideo: round2(fromGbp(settings.firstOfferShare * l.costP50)),
       // P65: the fee the package is costed at. P80: above it needs approval / re-optimising.
-      planningAllowancePerVideo: round2(fromGbp(l.costP65 * l.factor)),
-      maxFeePerVideo: round2(fromGbp(l.costP65 * l.factor)),
-      approvalThresholdPerVideo: l.costP80 == null ? null : round2(fromGbp(l.costP80 * l.factor)),
+      planningAllowancePerVideo: round2(fromGbp(l.costP65)),
+      maxFeePerVideo: round2(fromGbp(l.costP65)),
+      approvalThresholdPerVideo: l.costP80 == null ? null : round2(fromGbp(l.costP80)),
     };
   });
 
@@ -467,6 +529,8 @@ export function calculate(rawInputs, ctx) {
         viewsRecords: s.viewsRecords,
         costP50: round2(fromGbp(s.costP50)),
         costP65: round2(fromGbp(s.costP65)),
+        historicalPerVideo: round2(fromGbp(s.historicalPerVideo)),
+        rateSource: s.rateSource,
         costP80: s.costP80 == null ? null : round2(fromGbp(s.costP80)),
         campaigns: s.campaigns,
         factor: round4(s.factor),
@@ -484,6 +548,73 @@ export function calculate(rawInputs, ctx) {
 
 function fmtMoney(n, cur) {
   return new Intl.NumberFormat('en-GB', { style: 'currency', currency: cur, maximumFractionDigits: 0 }).format(n);
+}
+
+/**
+ * Most views: the package with the highest guarantee (P10 of the simulated
+ * campaign total). The guarantee isn't a sum over creators, so candidates come
+ * from the exact optimiser run on additive scores: P25 views, and expected
+ * views minus a variance penalty λ (λ found by iterating towards the P10 of a
+ * normal approximation, then bracketed). Every candidate is simulated; the
+ * best guarantee wins.
+ */
+function mostViews(options, params, first, guaranteeOf) {
+  const found = new Map([[JSON.stringify(first.counts), first]]);
+  const add = (res) => {
+    if (res.feasible) found.set(JSON.stringify(res.counts), res);
+    return res;
+  };
+  const byKey = Object.fromEntries(options.map((o) => [o.key, o]));
+  const Z = 1.2816; // standard normal quantile at 90%
+  let lam = 0;
+  for (let i = 0; i < 6; i++) {
+    const res = add(optimise({ ...params, options: options.map((o) => ({ ...o, views: o.mean - lam * o.variance })) }));
+    if (!res.feasible) break;
+    const V = Object.entries(res.counts).reduce((s, [k, m]) => s + m * byKey[k].variance, 0);
+    const next = V > 0 ? Z / (2 * Math.sqrt(V)) : 0;
+    if (Math.abs(next - lam) <= 0.02 * Math.max(next, lam)) break;
+    lam = next;
+  }
+  for (const f of [0.25, 0.5, 2, 4]) {
+    add(optimise({ ...params, options: options.map((o) => ({ ...o, views: o.mean - f * lam * o.variance })) }));
+  }
+  // Screen with fewer runs, then decide between the best three on the full simulation.
+  const screened = [...found.values()]
+    .map((r) => ({ r, g: guaranteeOf(r.counts, 1000) }))
+    .sort((a, b) => b.g - a.g)
+    .slice(0, 3);
+  let best = null;
+  for (const { r } of screened) {
+    const g = guaranteeOf(r.counts);
+    if (!best || g > best.g) best = { r, g };
+  }
+  return best.r;
+}
+
+// Rate card key: market | platform | vertical | size; '' vertical = any vertical.
+export const rateCardKey = (market, platform, niche, size) => `${market}|${platform}|${niche || ''}|${size}`;
+
+function planningRate(card, { market, platform, niche, size }) {
+  if (!card) return null;
+  const x = card[rateCardKey(market, platform, niche, size)] ?? (niche ? card[rateCardKey(market, platform, '', size)] : null);
+  return x > 0 ? Number(x) : null;
+}
+
+// Most specific proposal override wins: platform + market, then one of them, then all.
+function proposalRate(overrides, { platform, market, size }) {
+  let best = null;
+  let bestScore = -1;
+  for (const o of overrides) {
+    if (o.size !== size) continue;
+    if (o.platform !== '*' && o.platform !== platform) continue;
+    if (o.market !== '*' && o.market !== market) continue;
+    const score = (o.platform !== '*' ? 2 : 0) + (o.market !== '*' ? 1 : 0);
+    if (score > bestScore) {
+      best = o.costPerVideo;
+      bestScore = score;
+    }
+  }
+  return best;
 }
 
 function fail(error) {
@@ -507,7 +638,29 @@ export function calculateSet(rawInputs, ctx) {
   const recommended = budget
     ? RECOMMENDATIONS.map((r) => ({ ...r, ...calculate({ ...rawInputs, mode: 'budget', objective: r.objective, commercial: {} }, ctx) }))
     : [];
-  return { ok: true, yours, recommended };
+  return { ok: true, yours, recommended: reconcile(recommended) };
+}
+
+/**
+ * Every recommendation is a feasible package for the same budget and
+ * constraints, so Most views must have at least the guaranteed views of any of
+ * them, and Most videos at least the videos. If another objective found a
+ * better one, that package is used.
+ */
+export function reconcile(recommended) {
+  const ok = recommended.filter((r) => r.ok);
+  const better = (kind, metric) => {
+    const i = recommended.findIndex((r) => r.kind === kind && r.ok);
+    if (i < 0) return;
+    const top = ok.reduce((a, b) => (metric(b) > metric(a) ? b : a), recommended[i]);
+    if (top !== recommended[i]) {
+      const { kind: k, name, objective } = recommended[i];
+      recommended[i] = { ...top, kind: k, name, objective, inputs: { ...top.inputs, objective }, takenFrom: top.name };
+    }
+  };
+  better('performance', (r) => r.client.viewsPromised * 1e6 + r.internal.viewsExpected / 1e6);
+  better('content', (r) => r.client.totalVideos * 1e12 + r.client.viewsPromised);
+  return recommended;
 }
 
 /**

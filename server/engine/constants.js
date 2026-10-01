@@ -42,6 +42,7 @@ export const DEFAULT_SETTINGS = {
   promisePercentile: 10,
   simulationRuns: 5000,
   planningPercentile: 65,
+  planningRates: {}, // rate card: 'market|platform|vertical|size' -> planning cost per video, GBP
   // Creator fees above this percentile need approval / re-optimising.
   approvalPercentile: 80,
   giftedPostingRate: 0.5,

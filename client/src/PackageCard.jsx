@@ -119,21 +119,41 @@ export function PackageDetails({ result }) {
   const cur = result.currency;
   return (
     <div className="details">
-      <h4>Views by tier</h4>
-      <table className="table">
+      <h4>By tier: cost and views</h4>
+      <table className="table audit">
         <thead>
-          <tr><th>Tier</th><th>Creators</th><th>Videos</th><th>Guaranteed (P10)</th><th>Low</th><th>Likely</th><th>High</th></tr>
+          <tr><th>Tier / creator type</th><th>Creators</th><th>Videos</th><th>Cost / video</th><th>Creator cost</th><th>Views / video P25 · P50</th><th>Guaranteed (P10)</th><th>Low · likely · high</th></tr>
         </thead>
         <tbody>
           {(i.tiers || []).map((t) => (
-            <tr key={t.tier}>
-              <td>{t.tier}</td><td>{fmtInt(t.creators)}</td><td>{fmtInt(t.videos)}</td><td><b>{fmtInt(t.guaranteedViews)}</b></td>
-              <td>{fmtInt(t.low)}</td><td>{fmtInt(t.likely)}</td><td>{fmtInt(t.high)}</td>
-            </tr>
+            <React.Fragment key={t.tier}>
+              <tr className="tier-row">
+                <td><b>{t.tier}</b></td><td>{fmtInt(t.creators)}</td><td>{fmtInt(t.videos)}</td><td></td>
+                <td>{t.creatorCost != null ? fmtMoney(t.creatorCost, cur) : t.tier === 'Gifted' ? fmtMoney(i.costs.gifting, cur) : ''}</td><td></td>
+                <td><b>{fmtInt(t.guaranteedViews)}</b></td><td className="muted">{fmtInt(t.low)} · {fmtInt(t.likely)} · {fmtInt(t.high)}</td>
+              </tr>
+              {(t.lines || []).map((l) => (
+                <tr key={l.key} className="line-row">
+                  <td>{l.label}<div className="muted">{l.platform} · {l.market}</div></td>
+                  <td>{fmtInt(l.creators)}</td><td>{fmtInt(l.videos)}</td>
+                  <td>
+                    {fmtMoney(l.costPerVideo, cur)}
+                    <div className="muted">
+                      {l.rateSource === 'historical' ? `historical P65${l.multiVideoFactor !== 1 ? ` × ${l.multiVideoFactor} multi-video` : ''}` : `${l.rateSource} (historical ${fmtMoney(l.historicalPerVideo, cur)})`}
+                    </div>
+                  </td>
+                  <td>{fmtMoney(l.creatorCost, cur)}</td>
+                  <td>{fmtInt(l.viewsPerVideoP25)} · {fmtInt(l.viewsPerVideoP50)}</td>
+                  <td></td>
+                  <td className="muted small">{l.costRecords} bookings{l.campaigns != null ? ` / ${l.campaigns} campaigns` : ''} · {l.costLevel}</td>
+                </tr>
+              ))}
+            </React.Fragment>
           ))}
           <tr>
-            <td><b>Total</b></td><td>{fmtInt(result.client.totalCreators + result.client.giftedCreators)}</td><td>{fmtInt(result.client.totalVideos)}</td>
-            <td><b>{fmtInt(result.client.viewsPromised)}</b></td><td>{fmtInt(i.viewsLow)}</td><td>{fmtInt(i.viewsExpected)}</td><td>{fmtInt(i.viewsUpside)}</td>
+            <td><b>Total</b></td><td>{fmtInt(result.client.totalCreators + result.client.giftedCreators)}</td><td>{fmtInt(result.client.totalVideos)}</td><td></td>
+            <td><b>{fmtMoney(i.costs.creators, cur)}</b></td><td></td>
+            <td><b>{fmtInt(result.client.viewsPromised)}</b></td><td className="muted">{fmtInt(i.viewsLow)} · {fmtInt(i.viewsExpected)} · {fmtInt(i.viewsUpside)}</td>
           </tr>
         </tbody>
       </table>
@@ -174,7 +194,7 @@ export function PackageDetails({ result }) {
       <h4>Rates used</h4>
       <table className="table">
         <thead>
-          <tr><th>Size</th><th>Cost data</th><th>Views data</th><th>Cost / video P50 · P65</th><th>Views P25 · P50 · P75</th></tr>
+          <tr><th>Size</th><th>Cost data</th><th>Views data</th><th>Cost / video P50 · planning</th><th>Views P25 · P50 · P75</th></tr>
         </thead>
         <tbody>
           {i.sizes.filter((s) => s.used).map((s) => (
@@ -182,7 +202,7 @@ export function PackageDetails({ result }) {
               <td>{s.label}<div className="muted">{s.platform} · {s.market}</div></td>
               <td><span className={`conf ${s.confidence.toLowerCase()}`}>{s.confidence}</span> <span className="muted">{s.records} creators{s.campaigns != null ? ` / ${s.campaigns} campaigns` : ''} · {s.level}</span></td>
               <td className="muted">n={s.viewsRecords} · {s.viewsLevel}</td>
-              <td>{fmtMoney(s.costP50, cur)} · {fmtMoney(s.costP65, cur)}{s.factor !== 1 ? ` ×${s.factor}` : ''}</td>
+              <td>{fmtMoney(s.costP50, cur)} · {fmtMoney(s.costP65, cur)}</td>
               <td>{fmtInt(s.viewsP25)} · {fmtInt(s.viewsP50)} · {fmtInt(s.viewsP75)}</td>
             </tr>
           ))}

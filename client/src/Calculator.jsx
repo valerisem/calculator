@@ -253,6 +253,9 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
   return (
     <>
     <SettingsPanel
+      meta={meta}
+      inputs={inputs}
+      onRatesSaved={() => setInputs({ ...inputs, ratesVersion: Date.now() })}
       defaults={meta.settings}
       values={inputs.settings || {}}
       onChange={(settings) => setInputs({ ...inputs, settings })}
@@ -398,7 +401,7 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
         <div className="section-head">
           <h2>Add-ons & media</h2>
         </div>
-        <AddOns meta={meta} inputs={inputs} setInputs={setInputs} />
+        <AddOns meta={meta} inputs={inputs} setInputs={setInputs} sizes={[set?.yours, ...(set?.recommended || [])].flatMap((r) => (r?.ok ? r.internal.sizes : []))} />
 
                 <button className="text-link toggle" onClick={() => setShowMore(!showMore)}>
           {showMore ? '− Hide' : '+ Show'} constraints for recommended packages

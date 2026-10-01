@@ -272,3 +272,38 @@ test('gifting: internal cost carries margin unless a client charge is set', () =
   assert.equal(calculate({ ...base, gifting: { ...gifting, enabled: false } }, ctx).internal.gifting, null);
   assert.equal(calculate({ ...base, gifting: { enabled: true, creators: 5 } }, ctx).ok, false);
 });
+
+test('Most views has the highest guarantee and Most videos the most videos', () => {
+  const rt = buildRateTable(fakeBookings(), [{ pd_deal_id: 100, wide_niche: 'Tech', account_owner_id: 9 }], settings);
+  const ctx = { ...rt, settings, fx };
+  for (const budget of [8000, 20000, 60000]) {
+    const set = calculateSet({ market: 'UK', platform: 'TikTok', niche: 'Tech', margin: 0.5, videosPerCreator: 3, currency: 'GBP', budget }, ctx);
+    const [views, balanced, videos] = set.recommended;
+    assert.ok(views.client.viewsPromised >= balanced.client.viewsPromised, `${budget}: views ${views.client.viewsPromised} < balanced ${balanced.client.viewsPromised}`);
+    assert.ok(views.client.viewsPromised >= videos.client.viewsPromised);
+    assert.ok(videos.client.totalVideos >= balanced.client.totalVideos && videos.client.totalVideos >= views.client.totalVideos);
+    assert.equal(views.objective, 'Performance');
+  }
+});
+
+test('rate card and proposal overrides set the creator cost per video', () => {
+  const rt = buildRateTable(fakeBookings(), [{ pd_deal_id: 100, wide_niche: 'Tech', account_owner_id: 9 }], settings);
+  const base = { markets: ['UK'], platforms: ['TikTok'], niche: 'Tech', margin: 0.5, videosPerCreator: 1, currency: 'GBP', mode: 'package', package: { 'TikTok|UK|micro_25k_50k': 2 } };
+  const plain = calculate(base, { ...rt, settings, fx });
+  const line = () => plain.internal.tiers[0].lines[0];
+  assert.equal(line().rateSource, 'historical');
+  // Rate card (GBP per video, before the multi-video factor) for this vertical.
+  const card = { ...settings, planningRates: { 'UK|TikTok|Tech|micro_25k_50k': 700 } };
+  const r1 = calculate(base, { ...rt, settings: card, fx });
+  assert.equal(r1.internal.tiers[0].lines[0].costPerVideo, 700);
+  assert.equal(r1.internal.tiers[0].lines[0].rateSource, 'rate card');
+  assert.equal(r1.internal.costs.creators, 1400);
+  // "Any vertical" row applies when the vertical has none.
+  const any = calculate(base, { ...rt, settings: { ...settings, planningRates: { 'UK|TikTok||micro_25k_50k': 650 } }, fx });
+  assert.equal(any.internal.costs.creators, 1300);
+  // Proposal override (client currency) wins over the rate card; the most specific line wins.
+  const r2 = calculate({ ...base, currency: 'USD', rateOverrides: [{ size: 'micro_25k_50k', platform: '*', market: '*', costPerVideo: 500 }, { size: 'micro_25k_50k', platform: 'TikTok', market: 'UK', costPerVideo: 1000 }] }, { ...rt, settings: card, fx });
+  assert.equal(r2.internal.tiers[0].lines[0].rateSource, 'proposal');
+  assert.equal(r2.internal.costs.creators, 2000);
+  assert.ok(r2.internal.tiers[0].lines[0].historicalPerVideo > 0);
+});

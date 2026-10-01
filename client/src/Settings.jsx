@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { api, notify } from './api.js';
+import { fmtMoney } from './format.js';
 
 const pct = (x) => `${Math.round(Number(x) * 1000) / 10}%`;
 
@@ -28,7 +29,7 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
  * Collapsible settings strip at the top of the calculator. Changes apply to
  * this calculation straight away; "Save as default" stores them for everyone.
  */
-export function SettingsPanel({ defaults, values, onChange, onDefaultsSaved }) {
+export function SettingsPanel({ meta, inputs, defaults, values, onChange, onDefaultsSaved, onRatesSaved }) {
   const [open, setOpen] = useState(false);
   const [how, setHow] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -82,6 +83,7 @@ export function SettingsPanel({ defaults, values, onChange, onDefaultsSaved }) {
               </div>
             </div>
           ))}
+          <RateCard meta={meta} inputs={inputs} onSaved={onRatesSaved} />
           <div className="strip-actions">
             <button className="text-link" onClick={() => setHow(!how)}>{how ? 'Hide' : 'How it’s calculated'}</button>
             {changed.length > 0 && <button className="ghost" onClick={() => onChange({})}>Reset to defaults</button>}
@@ -89,6 +91,76 @@ export function SettingsPanel({ defaults, values, onChange, onDefaultsSaved }) {
           </div>
           {how && <HowItWorks v={v} />}
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Rate card: historical P65 per video (read-only) and the planning rate used
+ * instead of it, per market × platform × vertical × size, for everyone.
+ */
+function RateCard({ meta, inputs, onSaved }) {
+  const [q, setQ] = useState({
+    market: inputs?.markets?.[0] || meta.markets[0]?.name || 'UK',
+    platform: inputs?.platforms?.[0] || 'TikTok',
+    niche: inputs?.niche || '',
+  });
+  const [data, setData] = useState(null);
+  const [draft, setDraft] = useState({});
+  const load = () => api(`/rates/card?${new URLSearchParams(q)}`).then((d) => { setData(d); setDraft({}); }).catch(() => setData(null));
+  useEffect(() => { load(); }, [q.market, q.platform, q.niche]);
+
+  const save = async (size) => {
+    if (!(size in draft)) return;
+    await api('/rates/card', { method: 'PUT', body: { ...q, size, rate: draft[size] === '' ? null : Number(draft[size]) } });
+    notify('Rate card saved for everyone');
+    await load();
+    onSaved?.();
+  };
+  const sel = (k) => (e) => setQ({ ...q, [k]: e.target.value });
+  const others = (data?.saved || []).filter((r) => !(r.market === q.market && r.platform === q.platform && r.niche === q.niche));
+
+  return (
+    <div>
+      <div className="strip-group">Creator rate card (£ per video)</div>
+      <div className="rate-filters">
+        <select className="line" value={q.market} onChange={sel('market')}>{meta.markets.map((m) => <option key={m.name}>{m.name}</option>)}</select>
+        <select className="line" value={q.platform} onChange={sel('platform')}>{meta.platforms.map((p) => <option key={p}>{p}</option>)}</select>
+        <select className="line" value={q.niche} onChange={sel('niche')}>
+          <option value="">Any vertical</option>
+          {meta.niches.map((n) => <option key={n.name}>{n.name}</option>)}
+        </select>
+      </div>
+      {data && (
+        <table className="table rate-card">
+          <thead><tr><th>Size</th><th>Historical P65</th><th>Based on</th><th>Planning rate</th></tr></thead>
+          <tbody>
+            {data.rows.map((r) => (
+              <tr key={r.size}>
+                <td>{r.label}</td>
+                <td>{r.historicalP65 == null ? '–' : fmtMoney(r.historicalP65, 'GBP')}</td>
+                <td className="muted small">{r.historicalP65 == null ? 'no data' : `${r.records} bookings${r.campaigns != null ? ` / ${r.campaigns} campaigns` : ''} · ${r.level}`}</td>
+                <td>
+                  <input
+                    className={`line ${r.planningRate != null ? 'set' : ''}`}
+                    type="number" min="0" step="any"
+                    placeholder={r.historicalP65 == null ? '' : String(Math.round(r.historicalP65))}
+                    value={r.size in draft ? draft[r.size] : r.planningRate ?? ''}
+                    onChange={(e) => setDraft({ ...draft, [r.size]: e.target.value })}
+                    onBlur={() => save(r.size)}
+                    onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+                  />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {others.length > 0 && (
+        <p className="muted small">
+          Also set: {others.map((r) => `${r.market} ${r.platform}${r.niche ? ` ${r.niche}` : ''} ${meta.sizes.find((z) => z.key === r.size)?.label} £${r.rate}`).join(' · ')}
+        </p>
       )}
     </div>
   );
@@ -102,9 +174,9 @@ export function HowItWorks({ v }) {
         <div className="formula">Creator cost = videos per creator × planning cost per video × multi-video factor × (1 + usage/exclusivity uplift %)</div>
         <dl>
           <dt>Planning cost per video</dt>
-          <dd>What we paid per video for that kind of creator (size, platform, market, niche) in past campaigns: the 65th percentile, so 65% of past bookings cost this or less.</dd>
+          <dd>The rate card's planning rate if one is set, otherwise what we paid per video for that kind of creator (size, platform, market, vertical) in past campaigns: the 65th percentile. A proposal can override it for its own creators.</dd>
           <dt>Multi-video factor</dt>
-          <dd>The discount creators give for several videos, from past bookings. Stays at 1 until there are 10+ bookings to measure it.</dd>
+          <dd>Cost per video at this many videos ÷ cost per video across all bookings of that size, from past bookings (10+ needed, otherwise 1). Never below one video's cost in total. Not applied to a proposal override, which is the final cost per video.</dd>
           <dt>Usage / exclusivity uplift</dt>
           <dd>Entered on each proposal when anything beyond organic-only and no exclusivity is chosen. No default.</dd>
         </dl>
@@ -119,7 +191,7 @@ export function HowItWorks({ v }) {
         <h3>3. Package from a budget</h3>
         <div className="formula">Creator money = (budget − paid media − pass-through boosting − fees − client gifting charge) × (1 − margin) − gifting without a client charge − brand-lift / other − boosting with margin</div>
         <p>
-          <b>Most views</b> fits the most views into the creator money. <b>Balanced</b> also rewards a mix (+{pct(v.balancedSizeBonus)} per extra size, +{pct(v.balancedCreatorBonus)} per extra creator).
+          <b>Most views</b> picks the package with the highest guaranteed (P10) views, and is never below the other two. <b>Balanced</b> also rewards a mix (+{pct(v.balancedSizeBonus)} per extra size, +{pct(v.balancedCreatorBonus)} per extra creator).
           <b> Most videos</b> fits the most videos, then the most views. What's left is the negotiation buffer.
         </p>
       </div>

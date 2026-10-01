@@ -254,3 +254,17 @@ textarea.line { resize: vertical; font: inherit; font-size: 15px; }
 .output { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); background: var(--white); border-radius: 10px; padding: 10px 12px; text-align: left; font-weight: 500; color: var(--ink); }
 .output.on { border-color: var(--pink); box-shadow: 0 0 0 1px var(--pink); }
 .output .radio { width: 18px; height: 18px; }
+
+/* rate overrides and rate card */
+.rate-line { grid-template-columns: repeat(3, minmax(0, auto)) auto; margin-bottom: 8px; }
+.pair { display: flex; gap: 8px; }
+.pair .line { min-width: 0; }
+.rate-filters { display: flex; gap: 12px; margin: 4px 0 8px; flex-wrap: wrap; }
+.rate-filters .line { width: auto; min-width: 140px; }
+.rate-card input.line { width: 110px; }
+.rate-card input.line.set { font-weight: 600; }
+.table.audit .tier-row td { border-top: 1px solid var(--line, #e6e3ef); background: var(--soft, #f7f5fc); }
+.table.audit .line-row td:first-child { padding-left: 16px; }
+@media (max-width: 640px) {
+  .rate-line { grid-template-columns: 1fr 1fr; }
+}
