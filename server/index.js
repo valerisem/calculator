@@ -7,7 +7,6 @@ import { db, getDealOwnerPdIds, getRates, getSettings, logEvent, must, rebuildRa
 import { ADJUSTMENT_REASONS, BOOST_PLATFORMS, EXCLUSIVITY, PRICING_CONTEXTS, RECOMMENDATIONS, USAGE_RIGHTS, calculate, rateCardKey, reconcile, suggestMix } from './engine/calculator.js';
 import { calculateInWorker } from './calc-pool.js';
 import { OBJECTIVES, PLATFORMS, SIZE_BANDS } from './engine/constants.js';
-import { pickArchetype } from './engine/rates.js';
 import { CURRENCIES, getFx } from './fx.js';
 import * as pipedrive from './pipedrive.js';
 import { OUTPUTS, buildDeck } from './deck.js';
@@ -72,49 +71,44 @@ api.post('/rates/rebuild', wrap(async (req, res) => {
   res.json(out);
 }));
 
-// Rate card: historical P65 per video (read-only, from the rate table with the
-// usual fallback) next to the editable planning rate, per market × platform ×
-// vertical × size. Planning rates are in GBP per video and apply to everyone.
+// Rate card: the cost per video the team enters for each market × platform ×
+// size (GBP, for everyone). It is the only creator cost the calculator uses.
+// History is shown next to it as guidance only, and only where that exact
+// market + platform + size has reliable data.
 api.get('/rates/card', wrap(async (req, res) => {
-  const { market, platform, niche = '' } = req.query;
+  const { market, platform } = req.query;
   if (!market || !platform) return res.status(400).json({ error: 'Choose a market and platform.' });
   const [settings, rates] = await Promise.all([getSettings(), getRates()]);
   const card = settings.planningRates || {};
+  const minN = settings.confidenceHigh ?? 10;
+  const minC = settings.minCampaigns ?? 3;
   res.json({
     rows: SIZE_BANDS.map((b) => {
-      const row = pickArchetype(rates?.archetypes || [], { market, platform, niche: niche || null, size: b.key }, settings);
-      const key = rateCardKey(market, platform, niche, b.key);
+      const h = (rates?.archetypes || []).find((a) => a.level === 2 && a.market === market && a.platform === platform && a.size_band === b.key);
+      const reliable = h && h.cost_p50 != null && h.n_cost >= minN && (h.n_cost_campaigns ?? 0) >= minC;
       return {
         size: b.key,
         label: b.label,
-        tier: b.tier,
-        historicalP65: row?.cost_p65 == null ? null : Math.round(row.cost_p65 * 100) / 100,
-        historicalP50: row?.cost_p50 == null ? null : Math.round(row.cost_p50 * 100) / 100,
-        level: row?.levelLabel ?? null,
-        records: row?.n_cost ?? 0,
-        campaigns: row?.costCampaigns ?? null,
-        reliable: row ? !row.lowFallback : false,
-        planningRate: card[key] ?? null,
+        costPerVideo: card[rateCardKey(market, platform, b.key)] ?? null,
+        historicalTypical: reliable ? Math.round(h.cost_p50) : null,
+        historicalBookings: reliable ? h.n_cost : null,
+        historicalCampaigns: reliable ? h.n_cost_campaigns : null,
       };
-    }),
-    saved: Object.entries(card).map(([key, rate]) => {
-      const [m, p, n, size] = key.split('|');
-      return { market: m, platform: p, niche: n, size, rate };
     }),
   });
 }));
 
 api.put('/rates/card', wrap(async (req, res) => {
-  const { market, platform, niche = '', size, rate } = req.body || {};
+  const { market, platform, size, rate } = req.body || {};
   if (!market || !PLATFORMS.includes(platform) || !SIZE_BANDS.some((b) => b.key === size)) {
     return res.status(400).json({ error: 'Market, platform and size are required.' });
   }
   const card = { ...((await getSettings()).planningRates || {}) };
-  const key = rateCardKey(market, platform, niche, size);
+  const key = rateCardKey(market, platform, size);
   if (rate === null || rate === '' || !(Number(rate) > 0)) delete card[key];
   else card[key] = Math.round(Number(rate) * 100) / 100;
   await saveSettings({ planningRates: card }, req.user.label);
-  res.json({ ok: true, planningRates: card });
+  res.json({ ok: true });
 }));
 
 api.get('/settings', wrap(async (_req, res) => res.json(await getSettings())));
@@ -306,8 +300,8 @@ async function writeLines(packageId, result) {
     first_offer_per_video: result.internal.brief[k]?.firstOfferPerVideo,
     max_fee_per_video: result.internal.brief[k]?.maxFeePerVideo,
     target_views_per_video: result.internal.brief[k]?.targetViewsPerVideo,
-    confidence: sizes[c.key]?.confidence,
-    fallback_level: sizes[c.key]?.level,
+    confidence: sizes[c.key] ? (sizes[c.key].viewsThin ? 'Low' : 'High') : null, // views data
+    fallback_level: sizes[c.key]?.viewsLevel,
   }));
   if (rows.length) await must(db().from('pc_package_lines').insert(rows));
 }
@@ -362,8 +356,8 @@ api.put('/packages/:id', wrap(async (req, res) => {
   await writeLines(pkg.id, result);
   await touchProposal(current.proposal_id);
   await logEvent({ proposalId: current.proposal_id, packageId: pkg.id, action: 'package_updated', actor: req.user.label, payload: { version: pkg.version } });
-  // An approved package that changes is re-synced to Pipedrive.
-  if (pkg.is_approved) await syncToPipedrive(pkg, req.user.label);
+  // An approved package that changes is re-synced to Pipedrive (only with final pricing).
+  if (pkg.is_approved && !result.needsRates?.length) await syncToPipedrive(pkg, req.user.label);
   res.json(pkg);
 }));
 
@@ -375,8 +369,17 @@ api.delete('/packages/:id', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// A package whose creator sizes still need a cost per video has a provisional price only.
+function requireRates(pkg) {
+  const missing = pkg.result?.needsRates || [];
+  if (missing.length) {
+    throw Object.assign(new Error(`Cost per video required for ${missing.map((n) => `${n.label} (${n.platform}, ${n.market})`).join(', ')} before this package can be finalised.`), { status: 409 });
+  }
+}
+
 api.post('/packages/:id/approve', wrap(async (req, res) => {
   const pkg = await must(db().from('pc_packages').select('*').eq('id', req.params.id).single());
+  requireRates(pkg);
   await must(db().from('pc_packages').update({ is_approved: false, approved_at: null, approved_by: null }).eq('proposal_id', pkg.proposal_id).neq('id', pkg.id));
   const approved = await must(
     db().from('pc_packages').update({ is_approved: true, approved_at: new Date().toISOString(), approved_by: req.user.label })
@@ -431,6 +434,7 @@ async function touchProposal(id) {
 
 // Saves the slide options for the package and returns a short-lived download link.
 api.post('/packages/:id/slide-link', wrap(async (req, res) => {
+  requireRates(await must(db().from('pc_packages').select('result').eq('id', req.params.id).single()));
   if (req.body?.options) {
     await must(db().from('pc_packages').update({ slide_options: req.body.options }).eq('id', req.params.id));
   }
@@ -442,6 +446,7 @@ api.get('/packages/:id/slide', wrap(async (req, res) => sendSlide(req.params.id,
 
 async function sendSlide(packageId, actor, res) {
   const pkg = await must(db().from('pc_packages').select('*').eq('id', packageId).single());
+  requireRates(pkg);
   const proposal = await must(db().from('pc_proposals').select('*').eq('id', pkg.proposal_id).single());
   const settings = await getSettings();
   const options = {

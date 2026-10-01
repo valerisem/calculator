@@ -97,39 +97,29 @@ export function SettingsPanel({ meta, inputs, defaults, values, onChange, onDefa
 }
 
 /**
- * Creator rate card: the suggested cost per video from history (read-only) and
- * the planning rate the calculator uses, per market × platform × vertical ×
- * size, for everyone. The data behind each suggestion sits behind the info toggle.
+ * Creator rate card: the cost per video the team sets for each creator size,
+ * per market and platform, for everyone. It is the only creator cost the
+ * calculator uses. A historical typical cost shows next to it as guidance only,
+ * where there is reliable data.
  */
 function RateCard({ meta, inputs, onSaved }) {
   const [q, setQ] = useState({
     market: inputs?.markets?.[0] || meta.markets[0]?.name || 'UK',
     platform: inputs?.platforms?.[0] || 'TikTok',
-    niche: inputs?.niche || '',
   });
   const [data, setData] = useState(null);
   const [draft, setDraft] = useState({});
-  const [details, setDetails] = useState(false);
   const load = () => api(`/rates/card?${new URLSearchParams(q)}`).then((d) => { setData(d); setDraft({}); }).catch(() => setData(null));
-  useEffect(() => { load(); }, [q.market, q.platform, q.niche]);
+  useEffect(() => { load(); }, [q.market, q.platform]);
 
-  const suggested = (r) => (r.historicalP65 == null ? null : Math.round(r.historicalP65));
-  const put = async (size, rate) => {
-    await api('/rates/card', { method: 'PUT', body: { ...q, size, rate } });
-    await load();
-    onSaved?.();
-  };
-  const save = (r) => {
+  const save = async (r) => {
     if (!(r.size in draft)) return;
     const raw = draft[r.size];
     const val = raw === '' ? null : Number(raw);
-    // Typing the suggestion back (or clearing) means "use the suggestion".
-    if (val == null || val === suggested(r)) {
-      if (r.planningRate == null) return setDraft({});
-      return put(r.size, null);
-    }
-    if (val === r.planningRate) return setDraft({});
-    return put(r.size, val);
+    if (val === r.costPerVideo) return setDraft({});
+    await api('/rates/card', { method: 'PUT', body: { ...q, size: r.size, rate: val } });
+    await load();
+    onSaved?.();
   };
   const sel = (k) => (e) => setQ({ ...q, [k]: e.target.value });
 
@@ -140,49 +130,36 @@ function RateCard({ meta, inputs, onSaved }) {
         <div className="rate-filters">
           <select className="line" value={q.market} onChange={sel('market')}>{meta.markets.map((m) => <option key={m.name}>{m.name}</option>)}</select>
           <select className="line" value={q.platform} onChange={sel('platform')}>{meta.platforms.map((p) => <option key={p}>{p}</option>)}</select>
-          <select className="line" value={q.niche} onChange={sel('niche')}>
-            <option value="">Any vertical</option>
-            {meta.niches.map((n) => <option key={n.name}>{n.name}</option>)}
-          </select>
         </div>
-        <button className={`info ${details ? 'on' : ''}`} title="Based on recent creator bookings" aria-label="Show data details" onClick={() => setDetails(!details)}>i</button>
       </div>
       {data && (
         <table className="table rate-card">
-          <thead><tr><th>Creator size</th><th>Suggested / video</th><th>Your planning rate</th>{details && <th>Data</th>}</tr></thead>
+          <thead><tr><th>Creator size</th><th>Cost per video</th><th></th></tr></thead>
           <tbody>
-            {data.rows.map((r) => {
-              const own = r.planningRate != null;
-              return (
-                <tr key={r.size}>
-                  <td>{r.label}</td>
-                  <td className="muted">{suggested(r) == null ? '–' : fmtMoney(suggested(r), 'GBP')}</td>
-                  <td>
-                    <span className="rate-input">
-                      <span className="cur">£</span>
-                      <input
-                        className={`line ${own ? 'set' : ''}`}
-                        type="number" min="0" step="any"
-                        value={r.size in draft ? draft[r.size] : own ? r.planningRate : suggested(r) ?? ''}
-                        onChange={(e) => setDraft({ ...draft, [r.size]: e.target.value })}
-                        onBlur={() => save(r)}
-                        onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-                      />
-                      {own && <button className="text-link small" onClick={() => put(r.size, null)}>Reset</button>}
-                    </span>
-                  </td>
-                  {details && (
-                    <td className={`muted small ${r.historicalP65 != null && !r.reliable ? 'thin' : ''}`}>
-                      {r.historicalP65 == null ? 'no data' : `P65 · ${r.records} bookings / ${r.campaigns ?? '–'} campaigns · ${r.level}${r.reliable ? '' : ' · thin'}`}
-                    </td>
-                  )}
-                </tr>
-              );
-            })}
+            {data.rows.map((r) => (
+              <tr key={r.size}>
+                <td>{r.label}</td>
+                <td>
+                  <span className="rate-input">
+                    <span className="cur">£</span>
+                    <input
+                      className={`line ${r.costPerVideo == null ? 'missing' : ''}`}
+                      type="number" min="0" step="any" placeholder="Enter"
+                      value={r.size in draft ? draft[r.size] : r.costPerVideo ?? ''}
+                      onChange={(e) => setDraft({ ...draft, [r.size]: e.target.value })}
+                      onBlur={() => save(r)}
+                      onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+                    />
+                  </span>
+                </td>
+                <td className="muted small" title={r.historicalTypical != null ? `${r.historicalBookings} bookings / ${r.historicalCampaigns} campaigns` : undefined}>
+                  {r.historicalTypical != null ? `Historical typical: ${fmtMoney(r.historicalTypical, 'GBP')}` : ''}
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       )}
-      {details && <p className="muted small">Suggested = what 65% of recent bookings of this kind cost per video or less. Planning rates apply to everyone.</p>}
     </div>
   );
 }
@@ -192,12 +169,10 @@ export function HowItWorks({ v }) {
     <div className="howto-grid">
       <div className="howto-block">
         <h3>1. What one creator costs us</h3>
-        <div className="formula">Creator cost = videos per creator × planning cost per video × multi-video factor × (1 + usage/exclusivity uplift %)</div>
+        <div className="formula">Planned creator cost = creators × videos per creator × cost per video × (1 + usage/exclusivity uplift %)</div>
         <dl>
-          <dt>Planning cost per video</dt>
-          <dd>The rate card's planning rate if one is set, otherwise what we paid per video for that kind of creator (size, platform, market, vertical) in past campaigns: the 65th percentile, from the most specific level with at least 10 bookings from 3 campaigns. A proposal can override it for its own creators.</dd>
-          <dt>Multi-video factor</dt>
-          <dd>Cost per video at this many videos ÷ cost per video across all bookings of that size, from past bookings (10+ needed, otherwise 1). Never below one video's cost in total. Not applied to a proposal override, which is the final cost per video.</dd>
+          <dt>Cost per video</dt>
+          <dd>Entered by the team in the rate card for each market, platform and creator size, or for one proposal only. A size with no cost can still be picked, but the package is provisional until a cost is entered.</dd>
           <dt>Usage / exclusivity uplift</dt>
           <dd>Entered on each proposal when anything beyond organic-only and no exclusivity is chosen. No default.</dd>
         </dl>
@@ -241,7 +216,7 @@ export function HowItWorks({ v }) {
           <dt>Minimum viable package</dt>
           <dd>Fewest creators the requirements allow, of the cheapest allowed type, plus this proposal's add-ons and media.</dd>
           <dt>Creator brief</dt>
-          <dd>First offer {pct(v.firstOfferShare)} of the typical (P50) fee; planning allowance P65; above P80 needs approval.</dd>
+          <dd>First offer {pct(v.firstOfferShare)} of the cost per video; the cost per video is the most to pay without approval.</dd>
           <dt>Gifting</dt>
           <dd>Set per proposal: creators × (product + shipping) is a delivery cost. Without a client gifting charge it carries the campaign margin; with one, the charge is added to the quote. By default {pct(v.giftedPostingRate)} of gifted creators post one video.</dd>
         </dl>

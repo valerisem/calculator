@@ -1,8 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { fmtInt, fmtMoney, fmtPct } from './format.js';
 
 // One package option on the right-hand side. view = 'client' | 'internal'.
-export default function PackageCard({ title, priceLabel, result, selected, onSelect, view, onUseMix, badge, empty, accent: accentOn = true }) {
+export default function PackageCard({ title, priceLabel, result, selected, onSelect, view, onUseMix, badge, empty, accent: accentOn = true, onEnterRates }) {
   if (!result) {
     return (
       <div className="pkg-card empty">
@@ -45,7 +45,9 @@ export default function PackageCard({ title, priceLabel, result, selected, onSel
         <span className={`radio ${selected ? 'on' : ''}`} />
         <h3>{title}</h3>
         {badge && <span className="badge">{badge}</span>}
+        {result.provisional && <span className="badge warn">Provisional price</span>}
       </div>
+      {result.needsRates?.length > 0 && <RatesRequired result={result} onEnterRates={onEnterRates} />}
 
       {view === 'client' ? (
         <>
@@ -102,6 +104,47 @@ export default function PackageCard({ title, priceLabel, result, selected, onSel
   );
 }
 
+/**
+ * "Cost per video required": the optimiser picked sizes with no cost entered.
+ * Entering them re-prices the package; they can also be saved to the rate card.
+ */
+function RatesRequired({ result, onEnterRates }) {
+  const [vals, setVals] = useState({});
+  const [toCard, setToCard] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const cur = result.currency;
+  const ready = result.needsRates.every((n) => Number(vals[n.key]) > 0);
+  const apply = async () => {
+    setBusy(true);
+    try {
+      await onEnterRates(result.needsRates.map((n) => ({ ...n, costPerVideo: Number(vals[n.key]) })), toCard, result.fxPerGbp);
+      setVals({});
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="rates-required" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+      <div className="rr-title">Cost per video required</div>
+      {result.needsRates.map((n) => (
+        <label className="rr-line" key={n.key}>
+          <span>{n.label} · {n.platform} · {n.market}</span>
+          <span className="rate-input">
+            <span className="cur">{cur}</span>
+            <input className="line" type="number" min="0" step="any" value={vals[n.key] ?? ''} onChange={(e) => setVals({ ...vals, [n.key]: e.target.value })} onKeyDown={(e) => e.key === 'Enter' && ready && apply()} />
+          </span>
+        </label>
+      ))}
+      {onEnterRates && (
+        <div className="rr-actions">
+          <label className="check"><input type="checkbox" checked={toCard} onChange={(e) => setToCard(e.target.checked)} /> Save to rate card for future proposals</label>
+          <button className="cta small" disabled={!ready || busy} onClick={apply}>Apply</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Metric({ label, value, big, className = '', hint }) {
   return (
     <div className="metric">
@@ -138,15 +181,12 @@ export function PackageDetails({ result }) {
                   <td>{fmtInt(l.creators)}</td><td>{fmtInt(l.videos)}</td>
                   <td>
                     {fmtMoney(l.costPerVideo, cur)}
-                    <div className="muted">
-                      {l.rateSource === 'historical' ? `historical P65${l.multiVideoFactor !== 1 ? ` × ${l.multiVideoFactor} multi-video` : ''}` : `${l.rateSource} (historical ${fmtMoney(l.historicalPerVideo, cur)})`}
-                    </div>
+                    <div className={l.rateSource === 'required' ? 'thin' : 'muted'}>{l.rateSource === 'required' ? 'required (provisional)' : l.rateSource}</div>
                   </td>
                   <td>{fmtMoney(l.creatorCost, cur)}</td>
                   <td>{fmtInt(l.viewsPerVideoP25)} · {fmtInt(l.viewsPerVideoP50)}</td>
                   <td></td>
                   <td className="muted small">
-                    <div className={l.costReliable === false ? 'thin' : ''}>Cost: {l.costRecords} bookings / {l.campaigns ?? '–'} campaigns · {l.costLevel}{l.costReliable === false ? ' · thin' : ''}</div>
                     <div className={l.viewsReliable === false ? 'thin' : ''}>Views: {l.viewsRecords} / {l.viewsCampaigns ?? '–'} campaigns · {l.viewsLevel}{l.viewsReliable === false ? ' · thin' : ''}</div>
                   </td>
                 </tr>
@@ -180,13 +220,13 @@ export function PackageDetails({ result }) {
       <h4>Campaign team brief</h4>
       <table className="table">
         <thead>
-          <tr><th>Creators</th><th>Size</th><th>Views / video</th><th>Videos</th><th>First offer</th><th>Planning (P65)</th><th>Approval above (P80)</th></tr>
+          <tr><th>Creators</th><th>Size</th><th>Views / video</th><th>Videos</th><th>First offer</th><th>Cost per video (max)</th></tr>
         </thead>
         <tbody>
           {i.brief.map((b) => (
             <tr key={b.creators}>
               <td>{b.creators}</td><td>{b.size}<div className="muted">{b.platform} · {b.market}</div></td><td>{fmtInt(b.targetViewsPerVideo)}</td><td>{b.videos}</td>
-              <td>{fmtMoney(b.firstOfferPerVideo, cur)}</td><td>{fmtMoney(b.planningAllowancePerVideo ?? b.maxFeePerVideo, cur)}</td><td>{b.approvalThresholdPerVideo == null ? '–' : fmtMoney(b.approvalThresholdPerVideo, cur)}</td>
+              <td>{fmtMoney(b.firstOfferPerVideo, cur)}</td><td>{fmtMoney(b.maxFeePerVideo, cur)}</td>
             </tr>
           ))}
         </tbody>
@@ -197,15 +237,14 @@ export function PackageDetails({ result }) {
       <h4>Rates used</h4>
       <table className="table">
         <thead>
-          <tr><th>Size</th><th>Cost data</th><th>Views data</th><th>Cost / video P50 · planning</th><th>Views P25 · P50 · P75</th></tr>
+          <tr><th>Size</th><th>Cost / video</th><th>Views data</th><th>Views P25 · P50 · P75</th></tr>
         </thead>
         <tbody>
           {i.sizes.filter((s) => s.used).map((s) => (
             <tr key={s.key}>
               <td>{s.label}<div className="muted">{s.platform} · {s.market}</div></td>
-              <td><span className={`conf ${s.lowFallback ? 'low' : 'high'}`}>{s.lowFallback ? 'Thin' : 'Reliable'}</span> <span className="muted">{s.records} bookings / {s.costCampaigns ?? '–'} campaigns · {s.level}</span></td>
+              <td>{fmtMoney(s.costPerVideo, cur)}<div className={s.rateSource === 'required' ? 'thin' : 'muted'}>{s.rateSource === 'required' ? 'required (provisional)' : s.rateSource}</div></td>
               <td><span className={`conf ${s.viewsThin ? 'low' : 'high'}`}>{s.viewsThin ? 'Thin' : 'Reliable'}</span> <span className="muted">{s.viewsRecords} / {s.viewsCampaigns ?? '–'} campaigns · {s.viewsLevel}</span></td>
-              <td>{fmtMoney(s.costP50, cur)} · {fmtMoney(s.costP65, cur)}</td>
               <td>{fmtInt(s.viewsP25)} · {fmtInt(s.viewsP50)} · {fmtInt(s.viewsP75)}</td>
             </tr>
           ))}

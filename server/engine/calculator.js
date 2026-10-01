@@ -1,6 +1,6 @@
 import { NANO_KEY, PLATFORMS, SIZE_BANDS, SIZE_BY_KEY } from './constants.js';
 import { optimise } from './optimiser.js';
-import { multiVideoFactor, pickArchetype, pickViewsRow } from './rates.js';
+import { pickArchetype, pickViewsRow } from './rates.js';
 import { hashString } from './stats.js';
 import { simulateViews } from './simulate.js';
 
@@ -153,7 +153,7 @@ export function normaliseInputs(raw, settings) {
  *   blended margin = (quote − all delivery costs) ÷ quote (secondary)
  */
 export function calculate(rawInputs, ctx) {
-  const { archetypes, factors, settings, fx } = ctx;
+  const { archetypes, settings, fx } = ctx;
   const inp = normaliseInputs(rawInputs, settings);
   const rate = fx[inp.currency];
   if (!rate) return fail(`No exchange rate for ${inp.currency}.`);
@@ -173,7 +173,11 @@ export function calculate(rawInputs, ctx) {
   }
   const uplift = needsUplift ? inp.usage.upliftPct / 100 : 0;
 
-  // Section 3: cost row (spec fallback) and views row (minimum-sample rule) per creator type.
+  // Cost per video: entered by the team (rate card, or this proposal's override).
+  // A size without one is still offered at a provisional cost (historical
+  // typical) so the options aren't narrowed, but a package using it is flagged
+  // "cost per video required" and can't be finalised until a cost is entered.
+  // Views per video: historical, from the most specific reliable level.
   const minSample = settings.guaranteeMinSample || 10;
   const combos = {};
   const rateFor = (platform, market, size) => {
@@ -181,22 +185,13 @@ export function calculate(rawInputs, ctx) {
     if (!(key in combos)) {
       const band = SIZE_BY_KEY[size];
       const q = { market, platform, niche: inp.niche, size };
-      const row = pickArchetype(archetypes, q, settings);
-      const vrow = row && pickViewsRow(archetypes, q, minSample, settings.minCampaigns ?? 3);
-      const F = multiVideoFactor(factors, size, v);
-      if (!row || !vrow) {
-        combos[key] = null;
-        return null;
-      }
-      // Cost per video at this many videos: historical P65 × F, unless the rate
-      // card (Settings) or this proposal sets a planning rate.
-      const historical = row.cost_p65 * F;
-      const card = planningRate(settings.planningRates, { market, platform, niche: inp.niche, size });
+      const vrow = pickViewsRow(archetypes, q, minSample, settings.minCampaigns ?? 3);
       const own = proposalRate(inp.rateOverrides, { platform, market, size });
-      const perVideo = own != null ? toGbp(own) : card != null ? card * F : historical;
-      const source = own != null ? 'proposal' : card != null ? 'rate card' : 'historical';
-      const scale = historical > 0 ? perVideo / historical : 1; // moves P50 / P80 with the planning rate
-      combos[key] = {
+      const card = Number(settings.planningRates?.[rateCardKey(market, platform, size)]);
+      const entered = own != null ? toGbp(own) : card > 0 ? card : null;
+      const provisional = entered == null ? pickArchetype(archetypes, q, settings)?.cost_p50 ?? null : null;
+      const perVideo = entered ?? provisional;
+      combos[key] = vrow && perVideo != null ? {
         key,
         size,
         platform,
@@ -204,32 +199,21 @@ export function calculate(rawInputs, ctx) {
         label: band.label,
         tier: band.tier,
         big: !!band.big,
-        confidence: row.confidence,
-        level: row.level,
-        levelLabel: row.levelLabel,
-        lowFallback: row.lowFallback,
-        records: row.n_cost,
-        // per video at v videos, with usage uplift
-        historicalPerVideo: historical * (1 + uplift),
-        rateSource: source,
-        costP50: row.cost_p50 * F * scale * (1 + uplift),
-        costP65: perVideo * (1 + uplift),
-        costP80: row.cost_p80 == null ? null : row.cost_p80 * F * scale * (1 + uplift),
-        campaigns: row.n_campaigns ?? null,
+        rateSource: own != null ? 'proposal' : entered != null ? 'rate card' : 'required',
+        costPerVideoGbp: perVideo * (1 + uplift), // with usage uplift
         viewsLevel: vrow.levelLabel,
         viewsRecords: vrow.n_views,
         viewsThin: vrow.thin,
-        costCampaigns: row.costCampaigns,
         viewsCampaigns: vrow.viewCampaigns,
         // Cleaned historical views per video; older rate builds only have percentiles.
         viewsSample: vrow.views_sample?.length ? vrow.views_sample : [vrow.views_p25, vrow.views_p50, vrow.views_p75].filter((x) => x != null),
         viewsP25: vrow.views_p25,
         viewsP50: vrow.views_p50,
         viewsP75: vrow.views_p75,
-        factor: F,
+        // Planned creator cost = videos per creator × cost per video
         packageCostGbp: v * perVideo * (1 + uplift),
         packageViewsP25: v * vrow.views_p25,
-      };
+      } : null;
     }
     return combos[key];
   };
@@ -307,7 +291,7 @@ export function calculate(rawInputs, ctx) {
     options = options.filter(
       (o) => !options.some((q) => q !== o && q.group === o.group && beats(q, o) && (!beats(o, q) || q.key < o.key)),
     );
-    if (!options.length) return fail('No rate data for the allowed sizes in these markets.');
+    if (!options.length) return fail('No data for the allowed sizes in these markets.');
     const minFromVideos = inp.requiredVideos ? Math.ceil(Math.max(0, inp.requiredVideos - giftedPosts) / v) : 0;
     const params = {
       creatorMoney: creatorMoneyGbp,
@@ -332,7 +316,7 @@ export function calculate(rawInputs, ctx) {
     for (const [k, n] of Object.entries(inp.package)) {
       const [platform, market, size] = k.split('|');
       if (!rateFor(platform, market, size)) {
-        warnings.push(`No rate data for ${SIZE_BY_KEY[size].label} on ${platform} in ${market}; left out.`);
+        warnings.push(`No data for ${SIZE_BY_KEY[size].label} on ${platform} in ${market}; left out.`);
         continue;
       }
       counts[k] = n;
@@ -408,22 +392,17 @@ export function calculate(rawInputs, ctx) {
     market: l.market,
     creators: l.count,
     videos: l.count * v,
-    costPerVideo: round2(fromGbp(l.costP65)),
-    historicalPerVideo: round2(fromGbp(l.historicalPerVideo)),
+    costPerVideo: round2(fromGbp(l.costPerVideoGbp)),
     rateSource: l.rateSource,
-    multiVideoFactor: round4(l.factor),
-    costLevel: l.levelLabel,
-    costRecords: l.records,
-    campaigns: l.costCampaigns,
-    costReliable: !l.lowFallback,
-    viewsRecords: l.viewsRecords,
-    viewsCampaigns: l.viewsCampaigns,
-    viewsReliable: !l.viewsThin,
     creatorCost: round2(fromGbp(l.count * l.packageCostGbp)),
     viewsPerVideoP25: Math.round(l.viewsP25),
     viewsPerVideoP50: Math.round(l.viewsP50),
     viewsLevel: l.viewsLevel,
+    viewsRecords: l.viewsRecords,
+    viewsCampaigns: l.viewsCampaigns,
+    viewsReliable: !l.viewsThin,
   });
+
   const tiers = [...new Set(lines.map((l) => l.tier))].map((tier) => {
     const tl = lines.filter((l) => l.tier === tier);
     const creators = tl.reduce((s, l) => s + l.count, 0);
@@ -445,7 +424,6 @@ export function calculate(rawInputs, ctx) {
     warnings.push(`Service margin ${(effectiveMargin * 100).toFixed(1)}% is below ${settings.marginWarning * 100}%.`);
   }
   for (const l of lines) {
-    if (l.lowFallback) warnings.push(`${l.label} (${l.platform}, ${l.market}): cost from thin data even at "${l.levelLabel}" (${l.records} bookings / ${l.costCampaigns} campaigns).`);
     if (l.viewsThin) warnings.push(`${l.label} (${l.platform}, ${l.market}): views from thin data even at "${l.viewsLevel}" (${l.viewsRecords} observations / ${l.viewsCampaigns} campaigns), so the guarantee is less reliable.`);
   }
   if (viewsPromised === 0) warnings.push('Guaranteed views round down to 0 (under 10,000).');
@@ -463,17 +441,22 @@ export function calculate(rawInputs, ctx) {
       count: l.count,
       targetViewsPerVideo: Math.round(l.viewsP50),
       videos: v,
-      firstOfferPerVideo: round2(fromGbp(settings.firstOfferShare * l.costP50)),
-      // P65: the fee the package is costed at. P80: above it needs approval / re-optimising.
-      planningAllowancePerVideo: round2(fromGbp(l.costP65)),
-      maxFeePerVideo: round2(fromGbp(l.costP65)),
-      approvalThresholdPerVideo: l.costP80 == null ? null : round2(fromGbp(l.costP80)),
+      firstOfferPerVideo: round2(fromGbp(settings.firstOfferShare * l.costPerVideoGbp)),
+      // The cost per video the package is planned at is the most to pay without approval.
+      maxFeePerVideo: round2(fromGbp(l.costPerVideoGbp)),
     };
   });
+
+  // Sizes in this package that still need a cost per video: the price is provisional until entered.
+  const needsRates = lines
+    .filter((l) => l.rateSource === 'required')
+    .map((l) => ({ key: l.key, size: l.size, label: l.label, platform: l.platform, market: l.market, provisionalPerVideo: round2(fromGbp(l.costPerVideoGbp / (1 + uplift))) }));
 
   return {
     ok: true,
     mode: inp.mode,
+    needsRates,
+    provisional: needsRates.length > 0,
     inputs: inp,
     currency: inp.currency,
     fxPerGbp: rate,
@@ -536,23 +519,13 @@ export function calculate(rawInputs, ctx) {
         label: s.label,
         platform: s.platform,
         market: s.market,
-        confidence: s.confidence,
-        level: s.levelLabel,
-        records: s.records,
+        costPerVideo: round2(fromGbp(s.costPerVideoGbp)),
+        rateSource: s.rateSource,
+        packageCost: round2(fromGbp(s.packageCostGbp)),
         viewsLevel: s.viewsLevel,
         viewsRecords: s.viewsRecords,
         viewsCampaigns: s.viewsCampaigns,
         viewsThin: s.viewsThin,
-        costCampaigns: s.costCampaigns,
-        lowFallback: s.lowFallback,
-        costP50: round2(fromGbp(s.costP50)),
-        costP65: round2(fromGbp(s.costP65)),
-        historicalPerVideo: round2(fromGbp(s.historicalPerVideo)),
-        rateSource: s.rateSource,
-        costP80: s.costP80 == null ? null : round2(fromGbp(s.costP80)),
-        campaigns: s.campaigns,
-        factor: round4(s.factor),
-        packageCost: round2(fromGbp(s.packageCostGbp)),
         viewsP25: Math.round(s.viewsP25),
         viewsP50: Math.round(s.viewsP50),
         viewsP75: Math.round(s.viewsP75),
@@ -609,14 +582,8 @@ function mostViews(options, params, first, guaranteeOf) {
   return best.r;
 }
 
-// Rate card key: market | platform | vertical | size; '' vertical = any vertical.
-export const rateCardKey = (market, platform, niche, size) => `${market}|${platform}|${niche || ''}|${size}`;
-
-function planningRate(card, { market, platform, niche, size }) {
-  if (!card) return null;
-  const x = card[rateCardKey(market, platform, niche, size)] ?? (niche ? card[rateCardKey(market, platform, '', size)] : null);
-  return x > 0 ? Number(x) : null;
-}
+// Rate card key: market | platform | size -> cost per video, GBP.
+export const rateCardKey = (market, platform, size) => `${market}|${platform}|${size}`;
 
 // Most specific proposal override wins: platform + market, then one of them, then all.
 function proposalRate(overrides, { platform, market, size }) {

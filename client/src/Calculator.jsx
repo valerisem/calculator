@@ -179,6 +179,18 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
   const savable = cards.filter((c) => c.result?.ok);
 
   const set1 = (k) => (e) => setInputs({ ...inputs, [k]: e.target.value });
+
+  // "Cost per video required": save to the rate card (all proposals) or to this proposal only, then re-price.
+  const enterRates = async (entries, toCard, fxPerGbp) => {
+    if (toCard) {
+      await Promise.all(entries.map((e) => api('/rates/card', { method: 'PUT', body: { market: e.market, platform: e.platform, size: e.size, rate: e.costPerVideo / (fxPerGbp || 1) } })));
+      setInputs({ ...inputs, ratesVersion: Date.now() });
+      return;
+    }
+    const same = (o, e) => o.size === e.size && o.platform === e.platform && o.market === e.market;
+    const keep = (inputs.rateOverrides || []).filter((o) => !entries.some((e) => same(o, e)));
+    setInputs({ ...inputs, rateOverrides: [...keep, ...entries.map(({ size, platform, market, costPerVideo }) => ({ size, platform, market, costPerVideo }))] });
+  };
   // Editing a line by hand stops the automatic fill.
   const editLines = (next) => {
     setAuto(false);
@@ -460,6 +472,7 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
               accent={c.kind !== 'yours'}
               onSelect={() => setSelected(c.kind)}
               onUseMix={c.kind !== 'yours' && c.result?.ok ? () => useMix(c) : null}
+              onEnterRates={enterRates}
             />
             {view === 'internal' && selectedKind === c.kind && <PackageDetails result={c.result} />}
           </React.Fragment>
@@ -472,7 +485,7 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
             </button>
           ) : (
             <>
-              <button className="ghost" disabled={busy || !selectedCard} onClick={() => save(deal, { slide: true })}>
+              <button className="ghost" disabled={busy || !selectedCard || selectedCard?.result?.provisional} title={selectedCard?.result?.provisional ? 'Enter the required cost per video first' : undefined} onClick={() => save(deal, { slide: true })}>
                 Download pricing slides
               </button>
               <button className="cta" disabled={busy || !savable.length} onClick={() => save(deal)}>

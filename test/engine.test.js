@@ -6,7 +6,14 @@ import { optimise } from '../server/engine/optimiser.js';
 import { buildRateTable, normaliseMarket, pickArchetype } from '../server/engine/rates.js';
 import { simulateViews } from '../server/engine/simulate.js';
 
-const settings = { ...DEFAULT_SETTINGS, rateOwnerIds: [] };
+// Rate card: cost per video entered by the team (GBP).
+const card = (market, f = 1) => ({
+  [`${market}|TikTok|nano_1k_10k`]: 100 * f,
+  [`${market}|TikTok|micro_25k_50k`]: 300 * f,
+  [`${market}|TikTok|mid_100k_150k`]: 800 * f,
+  [`${market}|TikTok|macro_350k_1m`]: 2000 * f,
+});
+const settings = { ...DEFAULT_SETTINGS, rateOwnerIds: [], planningRates: { ...card('UK'), ...card('US'), ...card('Germany', 0.5) } };
 const fx = { GBP: 1, USD: 1.25, EUR: 1.15 };
 const CAMPAIGNS = [100, 101, 102, 103].map((id) => ({ pd_deal_id: id, wide_niche: 'Tech', account_owner_id: 9 }));
 
@@ -262,8 +269,8 @@ test('paid media is pass-through plus fee; boosting margin treatment; commercial
   assert.ok(media.internal.standardBlendedMargin < 0.4);
   assert.ok(!media.warnings.some((w) => /Service margin/.test(w)));
   // P80 approval threshold sits above the P65 planning allowance; campaign counts present.
-  for (const b of plain.internal.brief) assert.ok(b.approvalThresholdPerVideo >= b.planningAllowancePerVideo);
-  assert.ok(plain.internal.sizes.every((x) => typeof x.campaigns === 'number'));
+  for (const b of plain.internal.brief) assert.ok(b.firstOfferPerVideo < b.maxFeePerVideo);
+  assert.ok(plain.internal.sizes.every((x) => typeof x.viewsCampaigns === 'number'));
   // Minimum viable package.
   assert.ok(plain.internal.minimumViablePrice > 0 && plain.internal.minimumViablePrice <= plain.client.price);
 });
@@ -305,24 +312,28 @@ test('Most views has the highest guarantee and Most videos the most videos', () 
   }
 });
 
-test('rate card and proposal overrides set the creator cost per video', () => {
+test('cost per video comes from the rate card or the proposal; a missing one is provisional', () => {
   const rt = buildRateTable(fakeBookings(), CAMPAIGNS, settings);
-  const base = { markets: ['UK'], platforms: ['TikTok'], niche: 'Tech', margin: 0.5, videosPerCreator: 1, currency: 'GBP', mode: 'package', package: { 'TikTok|UK|micro_25k_50k': 2 } };
-  const plain = calculate(base, { ...rt, settings, fx });
-  const line = () => plain.internal.tiers[0].lines[0];
-  assert.equal(line().rateSource, 'historical');
-  // Rate card (GBP per video, before the multi-video factor) for this vertical.
-  const card = { ...settings, planningRates: { 'UK|TikTok|Tech|micro_25k_50k': 700 } };
-  const r1 = calculate(base, { ...rt, settings: card, fx });
-  assert.equal(r1.internal.tiers[0].lines[0].costPerVideo, 700);
-  assert.equal(r1.internal.tiers[0].lines[0].rateSource, 'rate card');
-  assert.equal(r1.internal.costs.creators, 1400);
-  // "Any vertical" row applies when the vertical has none.
-  const any = calculate(base, { ...rt, settings: { ...settings, planningRates: { 'UK|TikTok||micro_25k_50k': 650 } }, fx });
-  assert.equal(any.internal.costs.creators, 1300);
-  // Proposal override (client currency) wins over the rate card; the most specific line wins.
-  const r2 = calculate({ ...base, currency: 'USD', rateOverrides: [{ size: 'micro_25k_50k', platform: '*', market: '*', costPerVideo: 500 }, { size: 'micro_25k_50k', platform: 'TikTok', market: 'UK', costPerVideo: 1000 }] }, { ...rt, settings: card, fx });
-  assert.equal(r2.internal.tiers[0].lines[0].rateSource, 'proposal');
-  assert.equal(r2.internal.costs.creators, 2000);
-  assert.ok(r2.internal.tiers[0].lines[0].historicalPerVideo > 0);
+  const base = { markets: ['UK'], platforms: ['TikTok'], niche: 'Tech', margin: 0.5, videosPerCreator: 3, currency: 'GBP', mode: 'package', package: { 'TikTok|UK|micro_25k_50k': 2 } };
+  // creators × videos × cost per video
+  const r = calculate(base, { ...rt, settings, fx });
+  assert.equal(r.internal.costs.creators, 2 * 3 * 300);
+  assert.equal(r.internal.tiers[0].lines[0].rateSource, 'rate card');
+  assert.equal(r.provisional, false);
+  // Proposal override (client currency) wins; the most specific line wins.
+  const o = calculate({ ...base, currency: 'USD', rateOverrides: [{ size: 'micro_25k_50k', platform: '*', market: '*', costPerVideo: 500 }, { size: 'micro_25k_50k', platform: 'TikTok', market: 'UK', costPerVideo: 1000 }] }, { ...rt, settings, fx });
+  assert.equal(o.internal.tiers[0].lines[0].rateSource, 'proposal');
+  assert.equal(o.internal.costs.creators, 6000);
+  // No cost entered: still offered (provisional), flagged until entered.
+  const empty = { ...settings, planningRates: {} };
+  const p = calculate(base, { ...rt, settings: empty, fx });
+  assert.ok(p.ok);
+  assert.equal(p.provisional, true);
+  assert.deepEqual(p.needsRates.map((n) => n.key), ['TikTok|UK|micro_25k_50k']);
+  const b = calculate({ ...base, mode: 'budget', budget: 20000, objective: 'Performance' }, { ...rt, settings: { ...settings, planningRates: { 'UK|TikTok|micro_25k_50k': 300 } }, fx });
+  assert.ok(b.ok);
+  assert.ok(b.internal.sizes.some((z) => z.rateSource === 'required'), 'unpriced sizes stay in the options');
+  const done = calculate({ ...base, rateOverrides: [{ size: 'micro_25k_50k', platform: 'TikTok', market: 'UK', costPerVideo: 350 }] }, { ...rt, settings: empty, fx });
+  assert.equal(done.provisional, false);
+  assert.equal(done.internal.costs.creators, 2100);
 });

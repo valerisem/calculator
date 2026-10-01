@@ -32,7 +32,7 @@ export default function AddOns({ meta, inputs, setInputs, sizes = [] }) {
   const refFor = (r) => {
     const xs = sizes
       .filter((z) => z.size === r.size && (r.platform === '*' || z.platform === r.platform) && (r.market === '*' || z.market === r.market))
-      .map((z) => z.historicalPerVideo / upliftF);
+      .map((z) => z.costPerVideo / upliftF);
     if (!xs.length) return null;
     const lo = Math.min(...xs);
     const hi = Math.max(...xs);

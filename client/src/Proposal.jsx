@@ -45,6 +45,22 @@ export default function Proposal({ proposalId, meta, settings, onBack, onEdit, o
     }
   };
 
+  // "Cost per video required" on a saved package: rate card or this package only, then re-price it.
+  const enterRates = (p) => async (entries, toCard, fxPerGbp) => {
+    if (toCard) {
+      await Promise.all(entries.map((e) => api('/rates/card', { method: 'PUT', body: { market: e.market, platform: e.platform, size: e.size, rate: e.costPerVideo / (fxPerGbp || 1) } })));
+    }
+    const same = (o, e) => o.size === e.size && o.platform === e.platform && o.market === e.market;
+    const keep = (p.inputs.rateOverrides || []).filter((o) => !entries.some((e) => same(o, e)));
+    const rateOverrides = toCard ? keep : [...keep, ...entries.map(({ size, platform, market, costPerVideo }) => ({ size, platform, market, costPerVideo }))];
+    try {
+      await api(`/packages/${p.id}`, { method: 'PUT', body: { inputs: { ...p.inputs, rateOverrides } } });
+      await load();
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
   const approve = () => run(async () => {
     const out = await api(`/packages/${pkg.id}/approve`, { method: 'POST' });
     await load();
@@ -90,7 +106,7 @@ export default function Proposal({ proposalId, meta, settings, onBack, onEdit, o
             <div className="actions">
               {pkg.is_approved
                 ? <button className="ghost" disabled={busy} onClick={withdraw}>Withdraw approval</button>
-                : <button className="cta" disabled={busy} onClick={approve}>Approve package <span>›</span></button>}
+                : <button className="cta" disabled={busy || pkg.result?.provisional} title={pkg.result?.provisional ? 'Enter the required cost per video first' : undefined} onClick={approve}>Approve package <span>›</span></button>}
               <button className="ghost" disabled={busy} onClick={() => onEdit(pkg)}>Adjust in calculator</button>
               <button className="ghost danger" disabled={busy} onClick={remove}>Delete</button>
             </div>
@@ -122,6 +138,7 @@ export default function Proposal({ proposalId, meta, settings, onBack, onEdit, o
               accent={p.mode !== 'yours'}
               badge={p.is_approved ? 'Approved' : null}
               onSelect={() => setSelected(p.id)}
+              onEnterRates={enterRates(p)}
             />
             {view === 'internal' && p.id === selected && <PackageDetails result={p.result} />}
           </React.Fragment>
