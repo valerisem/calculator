@@ -269,3 +269,10 @@ textarea.line { resize: vertical; font: inherit; font-size: 15px; }
   .rate-line { grid-template-columns: 1fr 1fr; }
 }
 .thin { color: var(--red); }
+.rate-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.rate-head .rate-filters { margin: 0; }
+.info { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--line, #d9d5e5); background: none; color: var(--muted); font: italic 600 12px/1 Georgia, serif; padding: 0; cursor: pointer; }
+.info.on { background: var(--ink, #1a1a2e); color: #fff; border-color: transparent; }
+.rate-input { display: inline-flex; align-items: center; gap: 4px; }
+.rate-input .cur { color: var(--muted); }
+.rate-card td { vertical-align: middle; }

@@ -97,8 +97,9 @@ export function SettingsPanel({ meta, inputs, defaults, values, onChange, onDefa
 }
 
 /**
- * Rate card: historical P65 per video (read-only) and the planning rate used
- * instead of it, per market × platform × vertical × size, for everyone.
+ * Creator rate card: the suggested cost per video from history (read-only) and
+ * the planning rate the calculator uses, per market × platform × vertical ×
+ * size, for everyone. The data behind each suggestion sits behind the info toggle.
  */
 function RateCard({ meta, inputs, onSaved }) {
   const [q, setQ] = useState({
@@ -108,60 +109,80 @@ function RateCard({ meta, inputs, onSaved }) {
   });
   const [data, setData] = useState(null);
   const [draft, setDraft] = useState({});
+  const [details, setDetails] = useState(false);
   const load = () => api(`/rates/card?${new URLSearchParams(q)}`).then((d) => { setData(d); setDraft({}); }).catch(() => setData(null));
   useEffect(() => { load(); }, [q.market, q.platform, q.niche]);
 
-  const save = async (size) => {
-    if (!(size in draft)) return;
-    await api('/rates/card', { method: 'PUT', body: { ...q, size, rate: draft[size] === '' ? null : Number(draft[size]) } });
-    notify('Rate card saved for everyone');
+  const suggested = (r) => (r.historicalP65 == null ? null : Math.round(r.historicalP65));
+  const put = async (size, rate) => {
+    await api('/rates/card', { method: 'PUT', body: { ...q, size, rate } });
     await load();
     onSaved?.();
   };
+  const save = (r) => {
+    if (!(r.size in draft)) return;
+    const raw = draft[r.size];
+    const val = raw === '' ? null : Number(raw);
+    // Typing the suggestion back (or clearing) means "use the suggestion".
+    if (val == null || val === suggested(r)) {
+      if (r.planningRate == null) return setDraft({});
+      return put(r.size, null);
+    }
+    if (val === r.planningRate) return setDraft({});
+    return put(r.size, val);
+  };
   const sel = (k) => (e) => setQ({ ...q, [k]: e.target.value });
-  const others = (data?.saved || []).filter((r) => !(r.market === q.market && r.platform === q.platform && r.niche === q.niche));
 
   return (
-    <div>
-      <div className="strip-group">Creator rate card (£ per video)</div>
-      <div className="rate-filters">
-        <select className="line" value={q.market} onChange={sel('market')}>{meta.markets.map((m) => <option key={m.name}>{m.name}</option>)}</select>
-        <select className="line" value={q.platform} onChange={sel('platform')}>{meta.platforms.map((p) => <option key={p}>{p}</option>)}</select>
-        <select className="line" value={q.niche} onChange={sel('niche')}>
-          <option value="">Any vertical</option>
-          {meta.niches.map((n) => <option key={n.name}>{n.name}</option>)}
-        </select>
+    <div className="rate-card-box">
+      <div className="rate-head">
+        <div className="strip-group">Creator rate card</div>
+        <div className="rate-filters">
+          <select className="line" value={q.market} onChange={sel('market')}>{meta.markets.map((m) => <option key={m.name}>{m.name}</option>)}</select>
+          <select className="line" value={q.platform} onChange={sel('platform')}>{meta.platforms.map((p) => <option key={p}>{p}</option>)}</select>
+          <select className="line" value={q.niche} onChange={sel('niche')}>
+            <option value="">Any vertical</option>
+            {meta.niches.map((n) => <option key={n.name}>{n.name}</option>)}
+          </select>
+        </div>
+        <button className={`info ${details ? 'on' : ''}`} title="Based on recent creator bookings" aria-label="Show data details" onClick={() => setDetails(!details)}>i</button>
       </div>
       {data && (
         <table className="table rate-card">
-          <thead><tr><th>Size</th><th>Historical P65</th><th>Based on</th><th>Planning rate</th></tr></thead>
+          <thead><tr><th>Creator size</th><th>Suggested / video</th><th>Your planning rate</th>{details && <th>Data</th>}</tr></thead>
           <tbody>
-            {data.rows.map((r) => (
-              <tr key={r.size}>
-                <td>{r.label}</td>
-                <td>{r.historicalP65 == null ? '–' : fmtMoney(r.historicalP65, 'GBP')}</td>
-                <td className={`muted small ${r.historicalP65 != null && !r.reliable ? 'thin' : ''}`}>{r.historicalP65 == null ? 'no data' : `${r.records} bookings / ${r.campaigns ?? '–'} campaigns · ${r.level}${r.reliable ? '' : ' · thin'}`}</td>
-                <td>
-                  <input
-                    className={`line ${r.planningRate != null ? 'set' : ''}`}
-                    type="number" min="0" step="any"
-                    placeholder={r.historicalP65 == null ? '' : String(Math.round(r.historicalP65))}
-                    value={r.size in draft ? draft[r.size] : r.planningRate ?? ''}
-                    onChange={(e) => setDraft({ ...draft, [r.size]: e.target.value })}
-                    onBlur={() => save(r.size)}
-                    onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-                  />
-                </td>
-              </tr>
-            ))}
+            {data.rows.map((r) => {
+              const own = r.planningRate != null;
+              return (
+                <tr key={r.size}>
+                  <td>{r.label}</td>
+                  <td className="muted">{suggested(r) == null ? '–' : fmtMoney(suggested(r), 'GBP')}</td>
+                  <td>
+                    <span className="rate-input">
+                      <span className="cur">£</span>
+                      <input
+                        className={`line ${own ? 'set' : ''}`}
+                        type="number" min="0" step="any"
+                        value={r.size in draft ? draft[r.size] : own ? r.planningRate : suggested(r) ?? ''}
+                        onChange={(e) => setDraft({ ...draft, [r.size]: e.target.value })}
+                        onBlur={() => save(r)}
+                        onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+                      />
+                      {own && <button className="text-link small" onClick={() => put(r.size, null)}>Reset</button>}
+                    </span>
+                  </td>
+                  {details && (
+                    <td className={`muted small ${r.historicalP65 != null && !r.reliable ? 'thin' : ''}`}>
+                      {r.historicalP65 == null ? 'no data' : `P65 · ${r.records} bookings / ${r.campaigns ?? '–'} campaigns · ${r.level}${r.reliable ? '' : ' · thin'}`}
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}
-      {others.length > 0 && (
-        <p className="muted small">
-          Also set: {others.map((r) => `${r.market} ${r.platform}${r.niche ? ` ${r.niche}` : ''} ${meta.sizes.find((z) => z.key === r.size)?.label} £${r.rate}`).join(' · ')}
-        </p>
-      )}
+      {details && <p className="muted small">Suggested = what 65% of recent bookings of this kind cost per video or less. Planning rates apply to everyone.</p>}
     </div>
   );
 }
