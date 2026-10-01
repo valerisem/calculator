@@ -109,6 +109,22 @@ export async function getRates() {
 
 const num = (v) => (v == null ? null : Number(v));
 
+// Pipedrive user ids of the rate owners and their pods: the calculator only offers their deals.
+let ownersCache = null;
+export async function getDealOwnerPdIds() {
+  if (ownersCache && Date.now() - ownersCache.at < 10 * 60 * 1000) return ownersCache.ids;
+  const settings = await getSettings();
+  const ownerIds = (settings.rateOwnerIds || []).map(Number);
+  const podIds = (settings.ratePodIds || []).map(Number);
+  const rows = await must(db().from('team').select('id,pod_id,pd_id,left_date').not('pd_id', 'is', null));
+  const ids = rows
+    .filter((t) => !t.left_date && (ownerIds.includes(t.id) || podIds.includes(t.pod_id)))
+    .sort((a, b) => Number(ownerIds.includes(b.id)) - Number(ownerIds.includes(a.id))) // owners first
+    .map((t) => Number(t.pd_id));
+  ownersCache = { at: Date.now(), ids };
+  return ids;
+}
+
 // ---- audit ---------------------------------------------------------------
 
 export async function logEvent({ proposalId = null, packageId = null, action, actor, payload = null }) {

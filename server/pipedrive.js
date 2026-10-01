@@ -33,7 +33,8 @@ const dealSummary = (d) => ({
   stageId: d.stage_id,
   orgId: d.org_id?.value ?? d.org_id ?? d.organization?.id ?? null,
   orgName: d.org_name ?? d.org_id?.name ?? d.organization?.name ?? null,
-  ownerName: d.owner_name ?? d.owner?.name ?? null,
+  ownerId: d.user_id?.id ?? d.user_id ?? d.owner?.id ?? null,
+  ownerName: d.owner_name ?? d.owner?.name ?? d.user_id?.name ?? null,
   updateTime: d.update_time,
   url: dealUrl(d.id),
 });
@@ -52,13 +53,25 @@ export async function loadCompanyDomain() {
   }
 }
 
-export async function listDeals(term) {
+// Open deals, limited to the given Pipedrive owners when a list is passed.
+export async function listDeals(term, ownerIds = null) {
+  const allowed = ownerIds ? new Set(ownerIds.map(Number)) : null;
+  const keep = (d) => !allowed || allowed.has(Number(d.ownerId));
   if (term && term.trim().length >= 2) {
-    const r = await pd('/deals/search', { query: { term: term.trim(), fields: 'title', status: 'open', limit: 30 } });
-    return (r.data?.items || []).map((i) => dealSummary(i.item));
+    const r = await pd('/deals/search', { query: { term: term.trim(), fields: 'title', status: 'open', limit: 100 } });
+    return (r.data?.items || []).map((i) => dealSummary(i.item)).filter(keep).slice(0, 30);
   }
-  const r = await pd('/deals', { query: { status: 'open', sort: 'update_time DESC', limit: 50 } });
-  return (r.data || []).map(dealSummary);
+  if (!allowed) {
+    const r = await pd('/deals', { query: { status: 'open', sort: 'update_time DESC', limit: 50 } });
+    return (r.data || []).map(dealSummary);
+  }
+  const lists = await Promise.all(
+    [...allowed].map((u) => pd('/deals', { query: { status: 'open', user_id: u, sort: 'update_time DESC', limit: 50 } })),
+  );
+  return lists
+    .flatMap((r) => (r.data || []).map(dealSummary))
+    .sort((a, b) => String(b.updateTime).localeCompare(String(a.updateTime)))
+    .slice(0, 50);
 }
 
 export async function searchOrganizations(term) {
@@ -77,7 +90,7 @@ export async function dealFieldOptions() {
   return { channel: (channel?.options || []).map((o) => ({ id: o.id, label: o.label })) };
 }
 
-export async function createDeal({ title, orgId, orgName, currency, value, channel }) {
+export async function createDeal({ title, orgId, orgName, currency, value, channel, ownerId }) {
   let org = orgId;
   if (!org && orgName) {
     const created = await pd('/organizations', { method: 'POST', body: { name: orgName } });
@@ -85,7 +98,7 @@ export async function createDeal({ title, orgId, orgName, currency, value, chann
   }
   const r = await pd('/deals', {
     method: 'POST',
-    body: { title, org_id: org || undefined, currency: currency || 'GBP', value: value || undefined, stage_id: config.pipedriveStageId, channel: channel || undefined },
+    body: { title, org_id: org || undefined, currency: currency || 'GBP', value: value || undefined, stage_id: config.pipedriveStageId, channel: channel || undefined, user_id: ownerId || undefined },
   });
   return dealSummary(r.data);
 }

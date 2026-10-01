@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireMonday, signDownload, verifyDownload } from './auth.js';
 import { config } from './config.js';
-import { db, getRates, getSettings, logEvent, must, rebuildRates, saveSettings, supabase } from './db.js';
+import { db, getDealOwnerPdIds, getRates, getSettings, logEvent, must, rebuildRates, saveSettings, supabase } from './db.js';
 import { ADJUSTMENT_REASONS, BOOST_PLATFORMS, EXCLUSIVITY, PRICING_CONTEXTS, RECOMMENDATIONS, USAGE_RIGHTS, calculate, suggestMix } from './engine/calculator.js';
 import { calculateInWorker } from './calc-pool.js';
 import { OBJECTIVES, PLATFORMS, SIZE_BANDS } from './engine/constants.js';
@@ -76,9 +76,17 @@ api.put('/settings', wrap(async (req, res) => res.json(await saveSettings(req.bo
 
 // ---- Pipedrive -------------------------------------------------------------
 
-api.get('/pipedrive/deals', wrap(async (req, res) => res.json(await pipedrive.listDeals(req.query.term))));
+// Only deals owned by the rate owners (Ritchie) and their pods.
+api.get('/pipedrive/deals', wrap(async (req, res) => res.json(await pipedrive.listDeals(req.query.term, await getDealOwnerPdIds()))));
+async function getAllowedDeal(id) {
+  const out = await pipedrive.getDeal(id);
+  if (!(await getDealOwnerPdIds()).includes(Number(out.deal.ownerId))) {
+    throw Object.assign(new Error("This deal isn't owned by Ritchie or his pod."), { status: 403 });
+  }
+  return out;
+}
 // Deal + values to prefill the calculator (nothing is saved).
-api.get('/pipedrive/deals/:id', wrap(async (req, res) => res.json(await pipedrive.getDeal(Number(req.params.id)))));
+api.get('/pipedrive/deals/:id', wrap(async (req, res) => res.json(await getAllowedDeal(Number(req.params.id)))));
 // Options for required deal fields (Source channel).
 api.get('/pipedrive/deal-options', wrap(async (_req, res) => res.json(await pipedrive.dealFieldOptions())));
 api.get('/pipedrive/orgs', wrap(async (req, res) => res.json(await pipedrive.searchOrganizations(req.query.term))));
@@ -86,7 +94,7 @@ api.post('/pipedrive/deals', wrap(async (req, res) => {
   const { title, orgId, orgName, currency, value, channel } = req.body || {};
   if (!title || !(orgId || orgName)) return res.status(400).json({ error: 'Deal title and client are required.' });
   if (!channel) return res.status(400).json({ error: 'Source channel is required in Pipedrive.' });
-  const deal = await pipedrive.createDeal({ title, orgId, orgName, currency, value, channel });
+  const deal = await pipedrive.createDeal({ title, orgId, orgName, currency, value, channel, ownerId: (await getDealOwnerPdIds())[0] });
   await logEvent({ action: 'pipedrive_deal_created', actor: req.user.label, payload: deal });
   res.json(deal);
 }));
@@ -107,7 +115,7 @@ api.get('/proposals', wrap(async (_req, res) => {
 api.post('/proposals', wrap(async (req, res) => {
   const dealId = Number(req.body?.pdDealId);
   if (!dealId) return res.status(400).json({ error: 'pdDealId is required.' });
-  const { deal, prefill } = await pipedrive.getDeal(dealId);
+  const { deal, prefill } = await getAllowedDeal(dealId);
   const existing = await must(db().from('pc_proposals').select('*').eq('pd_deal_id', dealId).maybeSingle());
   const fields = {
     deal_title: deal.title,
