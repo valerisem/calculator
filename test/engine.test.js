@@ -8,6 +8,7 @@ import { simulateViews } from '../server/engine/simulate.js';
 
 const settings = { ...DEFAULT_SETTINGS, rateOwnerIds: [] };
 const fx = { GBP: 1, USD: 1.25, EUR: 1.15 };
+const CAMPAIGNS = [100, 101, 102, 103].map((id) => ({ pd_deal_id: id, wide_niche: 'Tech', account_owner_id: 9 }));
 
 // Brute force over small counts, Performance objective.
 function bruteForce(options, C, maxEach = 30) {
@@ -67,14 +68,23 @@ test('balanced objective rewards using more sizes', () => {
   assert.deepEqual(bal.counts, { a: 1, b: 1 });
 });
 
-test('simulation percentiles are ordered and deterministic', () => {
-  const groups = [{ count: 5, videos: 3, p25: 5000, p50: 10000, p75: 20000 }];
+test('simulation samples history, never extrapolates, and keeps thin-history doubt', () => {
+  const sample = [1000, 2000, 3000, 5000, 8000, 10000, 15000, 20000, 40000, 90000];
+  const groups = [{ count: 5, videos: 3, sample }];
   const a = simulateViews(groups, null, { runs: 2000, seed: 7 });
   const b = simulateViews(groups, null, { runs: 2000, seed: 7 });
   assert.equal(a.p10, b.p10);
   assert.ok(a.p10 < a.p50 && a.p50 < a.p75);
-  // median of sum is near 5 × 3 × e^(mu + sigma²/2)… at least above 5×3×P25
-  assert.ok(a.p50 > 5 * 3 * 5000);
+  // Never above every creator getting the best views actually observed.
+  assert.ok(a.percentile(100) <= 5 * 3 * 90000);
+  // 100 creators: a 10-observation history leaves much more doubt than a
+  // 1,000-observation history with the same shape.
+  const big = Array.from({ length: 100 }, () => sample).flat();
+  const spread = (s) => {
+    const r = simulateViews([{ count: 100, videos: 3, sample: s }], null, { runs: 3000, seed: 3 });
+    return (r.p50 - r.p10) / r.p50;
+  };
+  assert.ok(spread(sample) > 2 * spread(big), `${spread(sample)} vs ${spread(big)}`);
 });
 
 function fakeBookings() {
@@ -83,7 +93,7 @@ function fakeBookings() {
   const add = (n, followers, fee, videos, views, extra = {}) => {
     for (let i = 0; i < n; i++) {
       rows.push({
-        id: id++, campaign_number: '100', platform: 'tiktok', location: 'UK', tiktok_followers: followers,
+        id: id++, campaign_number: String(100 + (i % 4)), platform: 'tiktok', location: 'UK', tiktok_followers: followers,
         avg_views: views * (0.8 + (i % 5) * 0.1), deliverables: videos, fee_gbp: fee * (0.9 + (i % 3) * 0.1),
         board_group: '👍 Final List of Creators', ...extra,
       });
@@ -100,7 +110,7 @@ function fakeBookings() {
 }
 
 test('rate table: groups, outliers, fallback', () => {
-  const { archetypes, flags, stats } = buildRateTable(fakeBookings(), [{ pd_deal_id: 100, wide_niche: 'Tech', account_owner_id: 9 }], settings);
+  const { archetypes, flags, stats } = buildRateTable(fakeBookings(), CAMPAIGNS, settings);
   assert.equal(flags.length, 1);
   assert.equal(stats.droppedGroup, 4);
   const micro = pickArchetype(archetypes, { market: 'UK', platform: 'TikTok', niche: 'Tech', size: 'micro_25k_50k' });
@@ -108,12 +118,18 @@ test('rate table: groups, outliers, fallback', () => {
   assert.equal(micro.confidence, 'High');
   const macro = pickArchetype(archetypes, { market: 'UK', platform: 'TikTok', niche: 'Tech', size: 'macro_350k_1m' });
   assert.equal(macro.level, 5); // UK has 3 records; platform + size has 13
+  // Plenty of bookings from one campaign is not reliable: falls back to broader data.
+  const one = fakeBookings().map((x) => ({ ...x, campaign_number: '100' }));
+  const single = buildRateTable(one, CAMPAIGNS, settings);
+  const m1 = pickArchetype(single.archetypes, { market: 'UK', platform: 'TikTok', niche: 'Tech', size: 'micro_25k_50k' }, settings);
+  assert.equal(m1.lowFallback, true);
+  assert.equal(m1.level, 6);
   assert.equal(normaliseMarket('USA'), 'US');
   assert.equal(normaliseMarket('Nothing'), null);
 });
 
 test('budget to package and package to budget agree', () => {
-  const rt = buildRateTable(fakeBookings(), [{ pd_deal_id: 100, wide_niche: 'Tech', account_owner_id: 9 }], settings);
+  const rt = buildRateTable(fakeBookings(), CAMPAIGNS, settings);
   const ctx = { ...rt, settings, fx };
   const base = { market: 'UK', platform: 'TikTok', niche: 'Tech', objective: 'Performance', margin: 0.5, videosPerCreator: 3 };
   const b = calculate({ ...base, mode: 'budget', budget: 20000, currency: 'GBP' }, ctx);
@@ -139,7 +155,7 @@ test('budget to package and package to budget agree', () => {
 });
 
 test('calculator screen: your creators and one recommendation per objective', () => {
-  const rt = buildRateTable(fakeBookings(), [{ pd_deal_id: 100, wide_niche: 'Tech', account_owner_id: 9 }], settings);
+  const rt = buildRateTable(fakeBookings(), CAMPAIGNS, settings);
   const ctx = { ...rt, settings, fx };
   const base = { market: 'UK', platform: 'TikTok', niche: 'Tech', margin: 0.5, videosPerCreator: 3, currency: 'GBP' };
   const none = calculateSet(base, ctx);
@@ -184,7 +200,7 @@ test('several markets: lines priced per market, recommendations choose across th
   const rows = fakeBookings().map((b) => ({ ...b }));
   // A German copy of the data where creators are half the price.
   const de = fakeBookings().map((b, i) => ({ ...b, id: 10_000 + i, location: 'Germany', fee_gbp: b.fee_gbp / 2 }));
-  const rt = buildRateTable([...rows, ...de], [{ pd_deal_id: 100, wide_niche: 'Tech', account_owner_id: 9 }], settings);
+  const rt = buildRateTable([...rows, ...de], CAMPAIGNS, settings);
   const ctx = { ...rt, settings, fx };
   const base = { platforms: ['TikTok'], markets: ['UK', 'Germany'], niche: 'Tech', margin: 0.5, videosPerCreator: 3, currency: 'GBP' };
   const uk = calculate({ ...base, mode: 'package', package: { 'TikTok|UK|micro_25k_50k': 4 } }, ctx);
@@ -198,7 +214,7 @@ test('several markets: lines priced per market, recommendations choose across th
 
 test('number of creators fills your creators', async () => {
   const { suggestMix } = await import('../server/engine/calculator.js');
-  const rt = buildRateTable(fakeBookings(), [{ pd_deal_id: 100, wide_niche: 'Tech', account_owner_id: 9 }], settings);
+  const rt = buildRateTable(fakeBookings(), CAMPAIGNS, settings);
   const ctx = { ...rt, settings, fx };
   const base = { platforms: ['TikTok'], markets: ['UK'], niche: 'Tech', margin: 0.5, videosPerCreator: 3, currency: 'GBP' };
   const hist = suggestMix(base, 7, ctx);
@@ -208,7 +224,7 @@ test('number of creators fills your creators', async () => {
 });
 
 test('paid media is pass-through plus fee; boosting margin treatment; commercial adjustment; tier guarantees', () => {
-  const rt = buildRateTable(fakeBookings(), [{ pd_deal_id: 100, wide_niche: 'Tech', account_owner_id: 9 }], settings);
+  const rt = buildRateTable(fakeBookings(), CAMPAIGNS, settings);
   const ctx = { ...rt, settings, fx };
   const base = { markets: ['UK'], platforms: ['TikTok'], niche: 'Tech', margin: 0.5, videosPerCreator: 3, currency: 'GBP', mode: 'package', package: { 'TikTok|UK|micro_25k_50k': 4, 'TikTok|UK|mid_100k_150k': 1 } };
   const plain = calculate(base, ctx);
@@ -253,7 +269,7 @@ test('paid media is pass-through plus fee; boosting margin treatment; commercial
 });
 
 test('gifting: internal cost carries margin unless a client charge is set', () => {
-  const rt = buildRateTable(fakeBookings(), [{ pd_deal_id: 100, wide_niche: 'Tech', account_owner_id: 9 }], settings);
+  const rt = buildRateTable(fakeBookings(), CAMPAIGNS, settings);
   const ctx = { ...rt, settings, fx };
   const base = { markets: ['UK'], platforms: ['TikTok'], niche: 'Tech', margin: 0.5, videosPerCreator: 3, currency: 'GBP', mode: 'package', package: { 'TikTok|UK|micro_25k_50k': 4 } };
   const plain = calculate(base, ctx);
@@ -274,7 +290,7 @@ test('gifting: internal cost carries margin unless a client charge is set', () =
 });
 
 test('Most views has the highest guarantee and Most videos the most videos', () => {
-  const rt = buildRateTable(fakeBookings(), [{ pd_deal_id: 100, wide_niche: 'Tech', account_owner_id: 9 }], settings);
+  const rt = buildRateTable(fakeBookings(), CAMPAIGNS, settings);
   const ctx = { ...rt, settings, fx };
   for (const budget of [8000, 20000, 60000]) {
     const set = calculateSet({ market: 'UK', platform: 'TikTok', niche: 'Tech', margin: 0.5, videosPerCreator: 3, currency: 'GBP', budget }, ctx);
@@ -290,7 +306,7 @@ test('Most views has the highest guarantee and Most videos the most videos', () 
 });
 
 test('rate card and proposal overrides set the creator cost per video', () => {
-  const rt = buildRateTable(fakeBookings(), [{ pd_deal_id: 100, wide_niche: 'Tech', account_owner_id: 9 }], settings);
+  const rt = buildRateTable(fakeBookings(), CAMPAIGNS, settings);
   const base = { markets: ['UK'], platforms: ['TikTok'], niche: 'Tech', margin: 0.5, videosPerCreator: 1, currency: 'GBP', mode: 'package', package: { 'TikTok|UK|micro_25k_50k': 2 } };
   const plain = calculate(base, { ...rt, settings, fx });
   const line = () => plain.internal.tiers[0].lines[0];

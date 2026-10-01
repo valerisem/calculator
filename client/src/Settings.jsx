@@ -140,7 +140,7 @@ function RateCard({ meta, inputs, onSaved }) {
               <tr key={r.size}>
                 <td>{r.label}</td>
                 <td>{r.historicalP65 == null ? '–' : fmtMoney(r.historicalP65, 'GBP')}</td>
-                <td className="muted small">{r.historicalP65 == null ? 'no data' : `${r.records} bookings${r.campaigns != null ? ` / ${r.campaigns} campaigns` : ''} · ${r.level}`}</td>
+                <td className={`muted small ${r.historicalP65 != null && !r.reliable ? 'thin' : ''}`}>{r.historicalP65 == null ? 'no data' : `${r.records} bookings / ${r.campaigns ?? '–'} campaigns · ${r.level}${r.reliable ? '' : ' · thin'}`}</td>
                 <td>
                   <input
                     className={`line ${r.planningRate != null ? 'set' : ''}`}
@@ -174,7 +174,7 @@ export function HowItWorks({ v }) {
         <div className="formula">Creator cost = videos per creator × planning cost per video × multi-video factor × (1 + usage/exclusivity uplift %)</div>
         <dl>
           <dt>Planning cost per video</dt>
-          <dd>The rate card's planning rate if one is set, otherwise what we paid per video for that kind of creator (size, platform, market, vertical) in past campaigns: the 65th percentile. A proposal can override it for its own creators.</dd>
+          <dd>The rate card's planning rate if one is set, otherwise what we paid per video for that kind of creator (size, platform, market, vertical) in past campaigns: the 65th percentile, from the most specific level with at least 10 bookings from 3 campaigns. A proposal can override it for its own creators.</dd>
           <dt>Multi-video factor</dt>
           <dd>Cost per video at this many videos ÷ cost per video across all bookings of that size, from past bookings (10+ needed, otherwise 1). Never below one video's cost in total. Not applied to a proposal override, which is the final cost per video.</dd>
           <dt>Usage / exclusivity uplift</dt>
@@ -199,7 +199,7 @@ export function HowItWorks({ v }) {
         <h3>4. What the client sees</h3>
         <dl>
           <dt>Guaranteed views (P10), overall and by tier</dt>
-          <dd>Beaten in 9 of 10 of 5,000 simulated campaigns. Only segments with at least {v.guaranteeMinSample} view records are used; otherwise a broader benchmark.</dd>
+          <dd>Beaten in 9 of 10 of 5,000 simulated campaigns. Each simulated campaign re-draws the historical views per video and draws every creator from them, so no video beats views actually observed, and a thin history keeps the guarantee cautious. Data counts as reliable with at least {v.guaranteeMinSample} observations from at least 3 campaigns; otherwise a broader benchmark is used.</dd>
           <dt>Cost per guaranteed view</dt>
           <dd>Final quote ÷ guaranteed views.</dd>
           <dt>Effective CPM</dt>

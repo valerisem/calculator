@@ -1,54 +1,52 @@
 import { mulberry32, percentile } from './stats.js';
 
-const Z75 = 0.6744897501960817; // standard normal quantile at 75%
-
-// Log-normal fitted to P25/P50/P75 of views per video.
-export function fitLogNormal({ p25, p50, p75 }) {
-  const mu = Math.log(Math.max(p50, 1));
-  const lo = Math.log(Math.max(p25 ?? p50, 1));
-  const hi = Math.log(Math.max(p75 ?? p50, 1));
-  return { mu, sigma: Math.max(0, (hi - lo) / (2 * Z75)) };
-}
-
-function normal(rand) {
-  let u = 0;
-  while (u === 0) u = rand();
-  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rand());
-}
-
 /**
- * Runs the campaign `runs` times (spec section 4, step 4).
- * @param {{count:number, videos:number, p25:number, p50:number, p75:number}[]} groups paid creators by size
- * @param {{count:number, postingRate:number, p25:number, p50:number, p75:number}|null} gifted
- * Groups may carry a `tag` (e.g. the tier); totals per tag come from the same
- * runs, so a tag's percentile is never above the overall one.
- * @returns {{p10:number,p50:number,p75:number, percentile:(p:number)=>number, byTag:Record<string,{percentile:(p:number)=>number}>}}
+ * Runs the campaign `runs` times (spec section 4, step 4), sampling the cleaned
+ * historical views-per-video observations themselves, so no simulated video
+ * gets more views than one actually observed.
+ *
+ * Thin history is uncertainty too: each run first re-draws the historical
+ * sample (a bootstrap, same size as the history), then draws every creator
+ * from that re-drawn sample. More creators average out creator-to-creator
+ * spread, but not the doubt about a 10-observation history: with few
+ * observations the re-drawn samples differ a lot from run to run, and the
+ * guarantee stays wide however many creators are booked.
+ *
+ * @param {{count:number, videos:number, sample:number[], tag?:string}[]} groups paid creators by type
+ * @param {{count:number, postingRate:number, sample:number[], tag?:string}|null} gifted
+ * Groups with the same `sample` array share the re-drawn history within a run.
+ * Totals per `tag` (e.g. the tier) come from the same runs, so a tag's
+ * percentile is never above the overall one.
  */
 export function simulateViews(groups, gifted, { runs = 5000, seed = 1 } = {}) {
   const rand = mulberry32(seed);
-  const dists = groups.map((g) => ({ ...g, ...fitLogNormal(g) }));
-  const gd = gifted && gifted.count > 0 ? { ...gifted, ...fitLogNormal(gifted) } : null;
+  const all = [...groups.map((g) => ({ ...g, posting: 1 })), ...(gifted && gifted.count > 0 ? [{ ...gifted, videos: 1, posting: gifted.postingRate }] : [])]
+    .filter((g) => g.count > 0 && g.sample?.length);
+  const samples = [...new Set(all.map((g) => g.sample))];
+  const worlds = samples.map((s) => new Float64Array(s.length));
+  const worldOf = all.map((g) => worlds[samples.indexOf(g.sample)]);
+
   const totals = new Float64Array(runs);
-  const tags = [...new Set(dists.map((d) => d.tag).filter((t) => t != null))];
-  if (gd && gd.tag != null && !tags.includes(gd.tag)) tags.push(gd.tag);
+  const tags = [...new Set(all.map((g) => g.tag).filter((t) => t != null))];
   const tagTotals = Object.fromEntries(tags.map((t) => [t, new Float64Array(runs)]));
   for (let r = 0; r < runs; r++) {
-    let total = 0;
-    for (const d of dists) {
-      let sub = 0;
-      for (let i = 0; i < d.count; i++) {
-        sub += Math.exp(d.mu + d.sigma * normal(rand)) * d.videos;
-      }
-      total += sub;
-      if (d.tag != null) tagTotals[d.tag][r] += sub;
+    // Re-draw each history for this run.
+    for (let k = 0; k < samples.length; k++) {
+      const s = samples[k];
+      const w = worlds[k];
+      for (let i = 0; i < s.length; i++) w[i] = s[Math.floor(rand() * s.length)];
     }
-    if (gd) {
+    let total = 0;
+    for (let j = 0; j < all.length; j++) {
+      const g = all[j];
+      const w = worldOf[j];
       let sub = 0;
-      for (let i = 0; i < gd.count; i++) {
-        if (rand() < gd.postingRate) sub += Math.exp(gd.mu + gd.sigma * normal(rand));
+      for (let i = 0; i < g.count; i++) {
+        if (g.posting < 1 && rand() >= g.posting) continue;
+        sub += w[Math.floor(rand() * w.length)] * g.videos;
       }
       total += sub;
-      if (gd.tag != null) tagTotals[gd.tag][r] += sub;
+      if (g.tag != null) tagTotals[g.tag][r] += sub;
     }
     totals[r] = total;
   }

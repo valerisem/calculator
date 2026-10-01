@@ -59,8 +59,12 @@ export const DEFAULT_SETTINGS = {
   firstOfferShare: 0.85,
   balancedSizeBonus: 0.05,
   balancedCreatorBonus: 0.01,
+  // A creator-type cell is reliable (High) with at least confidenceHigh
+  // observations from at least minCampaigns distinct campaigns; otherwise the
+  // calculator falls back to broader data.
   confidenceHigh: 10,
   confidenceMedium: 5,
+  minCampaigns: 3,
   outlierFollowerMultiple: 5,
   outlierMaxViews: 10_000_000,
   minimumBudgetGbp: 5000,

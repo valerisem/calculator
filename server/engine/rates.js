@@ -119,19 +119,24 @@ export function buildRateTable(bookings, campaigns, settings) {
       const key = [lvl.level, ...lvl.dims.map((d) => r[d]), r.size].join('|');
       let g = groups.get(key);
       if (!g) {
-        g = { level: lvl.level, size: r.size, costs: [], views: [], campaigns: new Set() };
+        g = { level: lvl.level, size: r.size, costs: [], views: [], campaigns: new Set(), costCampaigns: new Set(), viewCampaigns: new Set() };
         for (const d of ['market', 'platform', 'niche']) g[d] = lvl.dims.includes(d) ? r[d] : null;
         groups.set(key, g);
       }
-      if (r.costPerVideo) g.costs.push(r.costPerVideo);
       if (r.campaign) g.campaigns.add(r.campaign);
-      if (r.views) g.views.push(r.views);
+      if (r.costPerVideo) {
+        g.costs.push(r.costPerVideo);
+        if (r.campaign) g.costCampaigns.add(r.campaign);
+      }
+      if (r.views) {
+        g.views.push(r.views);
+        if (r.campaign) g.viewCampaigns.add(r.campaign);
+      }
     }
   }
 
   const archetypes = [];
   for (const g of groups.values()) {
-    const n = Math.min(g.costs.length, g.views.length);
     archetypes.push({
       level: g.level,
       market: g.market,
@@ -140,7 +145,9 @@ export function buildRateTable(bookings, campaigns, settings) {
       size_band: g.size,
       n_cost: g.costs.length,
       n_views: g.views.length,
-      confidence: confidenceFor(n, settings),
+      n_cost_campaigns: g.costCampaigns.size,
+      n_views_campaigns: g.viewCampaigns.size,
+      confidence: confidenceFor(g.costs.length, g.costCampaigns.size, settings),
       cost_p50: percentile(g.costs, 50),
       cost_p65: percentile(g.costs, settings.planningPercentile),
       cost_p80: percentile(g.costs, settings.approvalPercentile ?? 80),
@@ -148,17 +155,22 @@ export function buildRateTable(bookings, campaigns, settings) {
       views_p25: percentile(g.views, 25),
       views_p50: percentile(g.views, 50),
       views_p75: percentile(g.views, 75),
+      // The cleaned views-per-video observations themselves: the simulation samples these.
+      views_sample: g.views.length ? g.views.map(Math.round).sort((a, b) => a - b) : null,
     });
   }
 
   return { archetypes, flags, factors: multiVideoFactors(records, settings), stats };
 }
 
-export function confidenceFor(n, settings) {
-  if (n >= settings.confidenceHigh) return 'High';
+// High = reliable: enough observations from enough distinct campaigns.
+export function confidenceFor(n, campaigns, settings) {
+  if (n >= settings.confidenceHigh && campaigns >= (settings.minCampaigns ?? 3)) return 'High';
   if (n >= settings.confidenceMedium) return 'Medium';
   return 'Low';
 }
+
+const reliable = (n, campaigns, settings) => n >= settings.confidenceHigh && campaigns >= (settings.minCampaigns ?? 3);
 
 // F(v) = median cost per video at v videos ÷ median cost per video over all
 // bookings in the size band. The planning cost (P65) is already taken over all
@@ -170,19 +182,22 @@ function multiVideoFactors(records, settings) {
   const out = {};
   for (const band of SIZE_BANDS) {
     const all = [];
+    const allCampaigns = new Set();
     const byV = new Map();
     for (const r of records) {
       if (r.size !== band.key || !r.costPerVideo) continue;
       all.push(r.costPerVideo);
-      if (!byV.has(r.videos)) byV.set(r.videos, []);
-      byV.get(r.videos).push(r.costPerVideo);
+      allCampaigns.add(r.campaign);
+      if (!byV.has(r.videos)) byV.set(r.videos, { costs: [], campaigns: new Set() });
+      byV.get(r.videos).costs.push(r.costPerVideo);
+      byV.get(r.videos).campaigns.add(r.campaign);
     }
     const factors = {};
-    if (all.length >= settings.confidenceHigh) {
+    if (reliable(all.length, allCampaigns.size, settings)) {
       const base = median(all);
-      for (const [v, costs] of byV) {
-        if (costs.length < settings.confidenceHigh) continue;
-        factors[v] = { factor: Math.max(1 / v, median(costs) / base), n: costs.length };
+      for (const [v, { costs, campaigns }] of byV) {
+        if (!reliable(costs.length, campaigns.size, settings)) continue;
+        factors[v] = { factor: Math.max(1 / v, median(costs) / base), n: costs.length, campaigns: campaigns.size };
       }
     }
     out[band.key] = factors;
@@ -198,13 +213,16 @@ export function multiVideoFactor(factors, size, v) {
 // ---- lookup --------------------------------------------------------------
 
 /**
- * Picks the archetype row for one size: the first fallback level that is
- * Medium or High confidence. If none is, the most specific Low row is used and
- * flagged. Values are never combined across levels.
+ * Picks the cost row for one size: the most specific fallback level that is
+ * reliable (enough bookings from enough campaigns). If no level is, the
+ * broadest row with cost data is used and flagged. Values are never combined
+ * across levels.
  */
-export function pickArchetype(archetypes, { market, platform, niche, size }) {
+export function pickArchetype(archetypes, { market, platform, niche, size }, settings = {}) {
   const q = { market, platform, niche };
-  let firstLow = null;
+  const minN = settings.confidenceHigh ?? 10;
+  const minC = settings.minCampaigns ?? 3;
+  let broadest = null;
   for (const lvl of LEVELS) {
     if (lvl.dims.some((d) => !q[d])) continue;
     const row = archetypes.find(
@@ -216,19 +234,20 @@ export function pickArchetype(archetypes, { market, platform, niche, size }) {
         a.views_p50 != null,
     );
     if (!row) continue;
-    if (row.confidence !== 'Low') return { ...row, levelLabel: lvl.label, lowFallback: false };
-    if (!firstLow) firstLow = { ...row, levelLabel: lvl.label, lowFallback: true };
+    const camps = row.n_cost_campaigns ?? row.n_campaigns ?? 0;
+    if (row.n_cost >= minN && camps >= minC) return { ...row, levelLabel: lvl.label, lowFallback: false, costCampaigns: camps };
+    broadest = { ...row, levelLabel: lvl.label, lowFallback: true, costCampaigns: camps };
   }
-  return firstLow;
+  return broadest;
 }
 
 /**
- * Picks the row whose views feed the simulation (and so the P10 guarantee).
- * Needs at least `minSample` view records; otherwise falls back to a broader
- * level, down to size only. If even that is short, the broadest row with data
- * is used and flagged.
+ * Picks the row whose views feed the simulation (and so the guarantee): the
+ * most specific level with at least `minSample` view observations from at
+ * least minCampaigns campaigns. Otherwise the broadest row with views is used
+ * and flagged thin.
  */
-export function pickViewsRow(archetypes, { market, platform, niche, size }, minSample) {
+export function pickViewsRow(archetypes, { market, platform, niche, size }, minSample, minCampaigns = 3) {
   const q = { market, platform, niche };
   let broadest = null;
   for (const lvl of LEVELS) {
@@ -237,8 +256,9 @@ export function pickViewsRow(archetypes, { market, platform, niche, size }, minS
       (a) => a.level === lvl.level && a.size_band === size && lvl.dims.every((d) => a[d] === q[d]) && a.views_p50 != null,
     );
     if (!row) continue;
-    if (row.n_views >= minSample) return { ...row, levelLabel: lvl.label, thin: false };
-    broadest = { ...row, levelLabel: lvl.label, thin: true };
+    const camps = row.n_views_campaigns ?? row.n_campaigns ?? 0;
+    if (row.n_views >= minSample && camps >= minCampaigns) return { ...row, levelLabel: lvl.label, thin: false, viewCampaigns: camps };
+    broadest = { ...row, levelLabel: lvl.label, thin: true, viewCampaigns: camps };
   }
   return broadest;
 }

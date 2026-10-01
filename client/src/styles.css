@@ -268,3 +268,4 @@ textarea.line { resize: vertical; font: inherit; font-size: 15px; }
 @media (max-width: 640px) {
   .rate-line { grid-template-columns: 1fr 1fr; }
 }
+.thin { color: var(--red); }

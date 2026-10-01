@@ -145,7 +145,10 @@ export function PackageDetails({ result }) {
                   <td>{fmtMoney(l.creatorCost, cur)}</td>
                   <td>{fmtInt(l.viewsPerVideoP25)} · {fmtInt(l.viewsPerVideoP50)}</td>
                   <td></td>
-                  <td className="muted small">{l.costRecords} bookings{l.campaigns != null ? ` / ${l.campaigns} campaigns` : ''} · {l.costLevel}</td>
+                  <td className="muted small">
+                    <div className={l.costReliable === false ? 'thin' : ''}>Cost: {l.costRecords} bookings / {l.campaigns ?? '–'} campaigns · {l.costLevel}{l.costReliable === false ? ' · thin' : ''}</div>
+                    <div className={l.viewsReliable === false ? 'thin' : ''}>Views: {l.viewsRecords} / {l.viewsCampaigns ?? '–'} campaigns · {l.viewsLevel}{l.viewsReliable === false ? ' · thin' : ''}</div>
+                  </td>
                 </tr>
               ))}
             </React.Fragment>
@@ -200,8 +203,8 @@ export function PackageDetails({ result }) {
           {i.sizes.filter((s) => s.used).map((s) => (
             <tr key={s.key}>
               <td>{s.label}<div className="muted">{s.platform} · {s.market}</div></td>
-              <td><span className={`conf ${s.confidence.toLowerCase()}`}>{s.confidence}</span> <span className="muted">{s.records} creators{s.campaigns != null ? ` / ${s.campaigns} campaigns` : ''} · {s.level}</span></td>
-              <td className="muted">n={s.viewsRecords} · {s.viewsLevel}</td>
+              <td><span className={`conf ${s.lowFallback ? 'low' : 'high'}`}>{s.lowFallback ? 'Thin' : 'Reliable'}</span> <span className="muted">{s.records} bookings / {s.costCampaigns ?? '–'} campaigns · {s.level}</span></td>
+              <td><span className={`conf ${s.viewsThin ? 'low' : 'high'}`}>{s.viewsThin ? 'Thin' : 'Reliable'}</span> <span className="muted">{s.viewsRecords} / {s.viewsCampaigns ?? '–'} campaigns · {s.viewsLevel}</span></td>
               <td>{fmtMoney(s.costP50, cur)} · {fmtMoney(s.costP65, cur)}</td>
               <td>{fmtInt(s.viewsP25)} · {fmtInt(s.viewsP50)} · {fmtInt(s.viewsP75)}</td>
             </tr>

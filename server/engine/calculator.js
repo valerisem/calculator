@@ -2,7 +2,7 @@ import { NANO_KEY, PLATFORMS, SIZE_BANDS, SIZE_BY_KEY } from './constants.js';
 import { optimise } from './optimiser.js';
 import { multiVideoFactor, pickArchetype, pickViewsRow } from './rates.js';
 import { hashString } from './stats.js';
-import { fitLogNormal, simulateViews } from './simulate.js';
+import { simulateViews } from './simulate.js';
 
 const num = (v, d = 0) => (v === '' || v == null || Number.isNaN(Number(v)) ? d : Number(v));
 const optNum = (v) => (v === '' || v == null || Number.isNaN(Number(v)) ? null : Number(v));
@@ -181,8 +181,8 @@ export function calculate(rawInputs, ctx) {
     if (!(key in combos)) {
       const band = SIZE_BY_KEY[size];
       const q = { market, platform, niche: inp.niche, size };
-      const row = pickArchetype(archetypes, q);
-      const vrow = row && pickViewsRow(archetypes, q, minSample);
+      const row = pickArchetype(archetypes, q, settings);
+      const vrow = row && pickViewsRow(archetypes, q, minSample, settings.minCampaigns ?? 3);
       const F = multiVideoFactor(factors, size, v);
       if (!row || !vrow) {
         combos[key] = null;
@@ -208,7 +208,7 @@ export function calculate(rawInputs, ctx) {
         level: row.level,
         levelLabel: row.levelLabel,
         lowFallback: row.lowFallback,
-        records: Math.min(row.n_cost, row.n_views),
+        records: row.n_cost,
         // per video at v videos, with usage uplift
         historicalPerVideo: historical * (1 + uplift),
         rateSource: source,
@@ -219,6 +219,10 @@ export function calculate(rawInputs, ctx) {
         viewsLevel: vrow.levelLabel,
         viewsRecords: vrow.n_views,
         viewsThin: vrow.thin,
+        costCampaigns: row.costCampaigns,
+        viewsCampaigns: vrow.viewCampaigns,
+        // Cleaned historical views per video; older rate builds only have percentiles.
+        viewsSample: vrow.views_sample?.length ? vrow.views_sample : [vrow.views_p25, vrow.views_p50, vrow.views_p75].filter((x) => x != null),
         viewsP25: vrow.views_p25,
         viewsP50: vrow.views_p50,
         viewsP75: vrow.views_p75,
@@ -265,8 +269,8 @@ export function calculate(rawInputs, ctx) {
   // Simulation set-up, shared by the optimiser (Most views) and the results.
   const nano = gifted > 0 ? rateFor(inp.platforms[0], inp.markets[0], NANO_KEY) : null;
   if (gifted > 0 && !nano) warnings.push('No nano-size rate data, so gifted posts add no views.');
-  const groupOf = (l) => ({ count: l.count, videos: v, p25: l.viewsP25, p50: l.viewsP50, p75: l.viewsP75 });
-  const giftedGroup = nano ? { count: gifted, postingRate, p25: nano.viewsP25, p50: nano.viewsP50, p75: nano.viewsP75 } : null;
+  const groupOf = (l) => ({ count: l.count, videos: v, sample: l.viewsSample });
+  const giftedGroup = nano ? { count: gifted, postingRate, sample: nano.viewsSample } : null;
   const seedOf = (c) => hashString(JSON.stringify([c, v, gifted, postingRate, inp.niche]));
   const runs = settings.simulationRuns;
   const pctl = settings.promisePercentile;
@@ -289,10 +293,11 @@ export function calculate(rawInputs, ctx) {
         for (const market of inp.markets) {
           const r = rateFor(platform, market, size);
           if (!r) continue;
-          // Log-normal views per creator (v videos): mean and variance, for Most views.
-          const { mu, sigma } = fitLogNormal({ p25: r.viewsP25, p50: r.viewsP50, p75: r.viewsP75 });
-          const mean = v * Math.exp(mu + (sigma * sigma) / 2);
-          const variance = v * v * (Math.exp(sigma * sigma) - 1) * Math.exp(2 * mu + sigma * sigma);
+          // Views per creator (v videos) from the historical sample: mean and variance, for Most views.
+          const xs = r.viewsSample;
+          const m1 = xs.reduce((a, x) => a + x, 0) / xs.length;
+          const mean = v * m1;
+          const variance = v * v * (xs.reduce((a, x) => a + (x - m1) ** 2, 0) / xs.length);
           options.push({ key: r.key, group: size, cost: r.packageCostGbp, views: r.packageViewsP25, p50: r.viewsP50, p75: r.viewsP75, mean, variance, big: r.big });
         }
       }
@@ -409,7 +414,11 @@ export function calculate(rawInputs, ctx) {
     multiVideoFactor: round4(l.factor),
     costLevel: l.levelLabel,
     costRecords: l.records,
-    campaigns: l.campaigns,
+    campaigns: l.costCampaigns,
+    costReliable: !l.lowFallback,
+    viewsRecords: l.viewsRecords,
+    viewsCampaigns: l.viewsCampaigns,
+    viewsReliable: !l.viewsThin,
     creatorCost: round2(fromGbp(l.count * l.packageCostGbp)),
     viewsPerVideoP25: Math.round(l.viewsP25),
     viewsPerVideoP50: Math.round(l.viewsP50),
@@ -436,8 +445,8 @@ export function calculate(rawInputs, ctx) {
     warnings.push(`Service margin ${(effectiveMargin * 100).toFixed(1)}% is below ${settings.marginWarning * 100}%.`);
   }
   for (const l of lines) {
-    if (l.lowFallback) warnings.push(`${l.label} (${l.platform}, ${l.market}): cost from Low-confidence data (${l.records} records).`);
-    if (l.viewsThin) warnings.push(`${l.label} (${l.platform}, ${l.market}): only ${l.viewsRecords} view records even at "${l.viewsLevel}", so the guarantee is less reliable.`);
+    if (l.lowFallback) warnings.push(`${l.label} (${l.platform}, ${l.market}): cost from thin data even at "${l.levelLabel}" (${l.records} bookings / ${l.costCampaigns} campaigns).`);
+    if (l.viewsThin) warnings.push(`${l.label} (${l.platform}, ${l.market}): views from thin data even at "${l.viewsLevel}" (${l.viewsRecords} observations / ${l.viewsCampaigns} campaigns), so the guarantee is less reliable.`);
   }
   if (viewsPromised === 0) warnings.push('Guaranteed views round down to 0 (under 10,000).');
 
@@ -532,6 +541,10 @@ export function calculate(rawInputs, ctx) {
         records: s.records,
         viewsLevel: s.viewsLevel,
         viewsRecords: s.viewsRecords,
+        viewsCampaigns: s.viewsCampaigns,
+        viewsThin: s.viewsThin,
+        costCampaigns: s.costCampaigns,
+        lowFallback: s.lowFallback,
         costP50: round2(fromGbp(s.costP50)),
         costP65: round2(fromGbp(s.costP65)),
         historicalPerVideo: round2(fromGbp(s.historicalPerVideo)),

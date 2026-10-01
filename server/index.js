@@ -82,7 +82,7 @@ api.get('/rates/card', wrap(async (req, res) => {
   const card = settings.planningRates || {};
   res.json({
     rows: SIZE_BANDS.map((b) => {
-      const row = pickArchetype(rates?.archetypes || [], { market, platform, niche: niche || null, size: b.key });
+      const row = pickArchetype(rates?.archetypes || [], { market, platform, niche: niche || null, size: b.key }, settings);
       const key = rateCardKey(market, platform, niche, b.key);
       return {
         size: b.key,
@@ -92,7 +92,8 @@ api.get('/rates/card', wrap(async (req, res) => {
         historicalP50: row?.cost_p50 == null ? null : Math.round(row.cost_p50 * 100) / 100,
         level: row?.levelLabel ?? null,
         records: row?.n_cost ?? 0,
-        campaigns: row?.n_campaigns ?? null,
+        campaigns: row?.costCampaigns ?? null,
+        reliable: row ? !row.lowFallback : false,
         planningRate: card[key] ?? null,
       };
     }),
