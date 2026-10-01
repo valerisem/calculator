@@ -97,6 +97,7 @@ export function buildRateTable(bookings, campaigns, settings) {
     const fee = Number(b.fee_gbp) > 0 ? Number(b.fee_gbp) : null;
     const videos = Number(b.deliverables) > 0 ? Number(b.deliverables) : null;
     records.push({
+      campaign: b.campaign_number || null,
       market: normaliseMarket(b.location),
       platform: pf.platform,
       niche: campaign?.wide_niche || null,
@@ -116,11 +117,12 @@ export function buildRateTable(bookings, campaigns, settings) {
       const key = [lvl.level, ...lvl.dims.map((d) => r[d]), r.size].join('|');
       let g = groups.get(key);
       if (!g) {
-        g = { level: lvl.level, size: r.size, costs: [], views: [] };
+        g = { level: lvl.level, size: r.size, costs: [], views: [], campaigns: new Set() };
         for (const d of ['market', 'platform', 'niche']) g[d] = lvl.dims.includes(d) ? r[d] : null;
         groups.set(key, g);
       }
       if (r.costPerVideo) g.costs.push(r.costPerVideo);
+      if (r.campaign) g.campaigns.add(r.campaign);
       if (r.views) g.views.push(r.views);
     }
   }
@@ -139,6 +141,8 @@ export function buildRateTable(bookings, campaigns, settings) {
       confidence: confidenceFor(n, settings),
       cost_p50: percentile(g.costs, 50),
       cost_p65: percentile(g.costs, settings.planningPercentile),
+      cost_p80: percentile(g.costs, settings.approvalPercentile ?? 80),
+      n_campaigns: g.campaigns.size,
       views_p25: percentile(g.views, 25),
       views_p50: percentile(g.views, 50),
       views_p75: percentile(g.views, 75),

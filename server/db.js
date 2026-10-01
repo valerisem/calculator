@@ -90,6 +90,7 @@ export async function getRates() {
       ...r,
       cost_p50: num(r.cost_p50),
       cost_p65: num(r.cost_p65),
+      cost_p80: num(r.cost_p80),
       views_p25: num(r.views_p25),
       views_p50: num(r.views_p50),
       views_p75: num(r.views_p75),

@@ -21,16 +21,6 @@ export const PERSONAL_GROUPS = [
     ['boostingCpmUsd', 'Other', 'number', 'Other'],
     ['paidMediaFee', 'Default paid media fee (%)', 'number'],
   ]],
-  ['Usage rights & exclusivity uplift on creator cost (%)', [
-    ['usageRightsUplift', '30 days', 'percent', '30d'],
-    ['usageRightsUplift', '3 months', 'percent', '3m'],
-    ['usageRightsUplift', '6 months', 'percent', '6m'],
-    ['usageRightsUplift', '12 months', 'percent', '12m'],
-    ['usageRightsUplift', 'Perpetual', 'percent', 'perpetual'],
-    ['paidUsageUplift', 'Paid usage / whitelisting', 'percent'],
-    ['exclusivityUplift', 'Category exclusivity', 'percent', 'category'],
-    ['exclusivityUplift', 'Competitor restriction', 'percent', 'competitor'],
-  ]],
 ];
 export const PERSONAL_FIELDS = PERSONAL_GROUPS.flatMap(([, f]) => f);
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -110,19 +100,21 @@ export function HowItWorks({ v }) {
     <div className="howto-grid">
       <div className="howto-block">
         <h3>1. What one creator costs us</h3>
-        <div className="formula">Creator cost = videos per creator × planning cost per video × multi-video factor × (1 + usage/exclusivity uplift)</div>
+        <div className="formula">Creator cost = videos per creator × planning cost per video × multi-video factor × (1 + usage/exclusivity uplift %)</div>
         <dl>
           <dt>Planning cost per video</dt>
           <dd>What we paid per video for that kind of creator (size, platform, market, niche) in past campaigns: the 65th percentile, so 65% of past bookings cost this or less.</dd>
           <dt>Multi-video factor</dt>
           <dd>The discount creators give for several videos, from past bookings. Stays at 1 until there are 10+ bookings to measure it.</dd>
+          <dt>Usage / exclusivity uplift</dt>
+          <dd>Entered on each proposal when anything beyond organic-only and no exclusivity is chosen. No default.</dd>
         </dl>
       </div>
       <div className="howto-block">
         <h3>2. Price to quote</h3>
         <div className="formula">Standard quote = (creators + gifting + brand-lift / other + boosting with margin) ÷ (1 − margin) + paid media + pass-through boosting + management fees</div>
         <div className="formula">Final quote = standard quote × (1 + commercial adjustment)</div>
-        <p>Paid media is passed through at cost plus a management fee; it never gets the campaign margin. Effective margin = (final quote − all delivery costs) ÷ final quote.</p>
+        <p>Paid media is passed through at cost plus a management fee; it never gets the campaign margin.</p>
       </div>
       <div className="howto-block">
         <h3>3. Package from a budget</h3>
@@ -150,10 +142,14 @@ export function HowItWorks({ v }) {
         <dl>
           <dt>Expected performance</dt>
           <dd>Low P25 · likely P50 · high P75 of the simulated campaigns.</dd>
-          <dt>Margin</dt>
-          <dd>Standard and effective. Flagged below {pct(v.marginWarning)}.</dd>
+          <dt>Service margin (main)</dt>
+          <dd>(quote − pass-through spend − service costs) ÷ (quote − pass-through spend). Flagged below {pct(v.marginWarning)}.</dd>
+          <dt>Blended margin (secondary)</dt>
+          <dd>(quote − all delivery costs incl. media) ÷ quote. Shown, never used for the warning.</dd>
+          <dt>Minimum viable package</dt>
+          <dd>Fewest creators the requirements allow, of the cheapest allowed type, plus this proposal's add-ons and media.</dd>
           <dt>Creator brief</dt>
-          <dd>First offer {pct(v.firstOfferShare)} of the typical fee per video; maximum = planning cost per video.</dd>
+          <dd>First offer {pct(v.firstOfferShare)} of the typical (P50) fee; planning allowance P65; above P80 needs approval.</dd>
           <dt>Gifting</dt>
           <dd>{v.giftingCostPerCreatorGbp == null ? 'Cost not set (counted as £0)' : `£${v.giftingCostPerCreatorGbp} per gifted creator`}; {pct(v.giftedPostingRate)} of them post one video.</dd>
         </dl>

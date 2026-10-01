@@ -72,8 +72,8 @@ export default function PackageCard({ title, priceLabel, result, selected, onSel
       ) : (
         <>
           <div className="metrics">
-            <Metric label="Effective margin" value={fmtPct(i.expectedMargin)} big className={i.expectedMargin < (result.marginWarning ?? 0.4) ? 'bad' : accent} />
-            <Metric label={`Standard quote, ${cur}`} value={fmtInt(i.standardPrice)} hint={i.adjusted ? `${i.adjustmentPct > 0 ? '+' : ''}${i.adjustmentPct.toFixed(1)}% → ${fmtInt(i.finalPrice)}` : `margin ${fmtPct(i.standardMargin)}`} />
+            <Metric label="Service margin" value={fmtPct(i.expectedMargin)} big className={i.expectedMargin < (i.marginWarning ?? 0.4) ? 'bad' : accent} hint={`blended ${fmtPct(i.blendedMargin)}`} />
+            <Metric label={`Standard quote, ${cur}`} value={fmtInt(i.standardPrice)} hint={i.adjusted ? `${i.adjustmentPct > 0 ? '+' : ''}${i.adjustmentPct.toFixed(1)}% → ${fmtInt(i.finalPrice)}` : `service margin ${fmtPct(i.standardMargin)}`} />
             <Metric label="Buffer" value={fmtMoney(i.buffer, cur)} className={accent} />
           </div>
           <div className="rule" />
@@ -149,18 +149,20 @@ export function PackageDetails({ result }) {
         <dt>Paid media (pass-through)</dt><dd>{fmtMoney(i.costs.paidMedia, cur)}</dd>
         <dt>Management fees (revenue)</dt><dd>{fmtMoney(i.costs.fees, cur)}</dd>
         <dt><b>Total delivery cost</b></dt><dd><b>{fmtMoney(i.costs.total, cur)}</b></dd>
+        <dt>Service margin · blended margin</dt><dd>{fmtPct(i.expectedMargin)} · {fmtPct(i.blendedMargin)}</dd>
+        {i.minimumViablePrice != null && (<><dt>Minimum viable package ({i.minimumViableCreators} creator{i.minimumViableCreators === 1 ? '' : 's'})</dt><dd>{fmtMoney(i.minimumViablePrice, cur)}</dd></>)}
       </dl>
 
       <h4>Campaign team brief</h4>
       <table className="table">
         <thead>
-          <tr><th>Creators</th><th>Size</th><th>Views / video</th><th>Videos</th><th>First offer</th><th>Max fee</th></tr>
+          <tr><th>Creators</th><th>Size</th><th>Views / video</th><th>Videos</th><th>First offer</th><th>Planning (P65)</th><th>Approval above (P80)</th></tr>
         </thead>
         <tbody>
           {i.brief.map((b) => (
             <tr key={b.creators}>
               <td>{b.creators}</td><td>{b.size}<div className="muted">{b.platform} · {b.market}</div></td><td>{fmtInt(b.targetViewsPerVideo)}</td><td>{b.videos}</td>
-              <td>{fmtMoney(b.firstOfferPerVideo, cur)}</td><td>{fmtMoney(b.maxFeePerVideo, cur)}</td>
+              <td>{fmtMoney(b.firstOfferPerVideo, cur)}</td><td>{fmtMoney(b.planningAllowancePerVideo ?? b.maxFeePerVideo, cur)}</td><td>{b.approvalThresholdPerVideo == null ? '–' : fmtMoney(b.approvalThresholdPerVideo, cur)}</td>
             </tr>
           ))}
         </tbody>
@@ -177,7 +179,7 @@ export function PackageDetails({ result }) {
           {i.sizes.filter((s) => s.used).map((s) => (
             <tr key={s.key}>
               <td>{s.label}<div className="muted">{s.platform} · {s.market}</div></td>
-              <td><span className={`conf ${s.confidence.toLowerCase()}`}>{s.confidence}</span> <span className="muted">n={s.records} · {s.level}</span></td>
+              <td><span className={`conf ${s.confidence.toLowerCase()}`}>{s.confidence}</span> <span className="muted">{s.records} creators{s.campaigns != null ? ` / ${s.campaigns} campaigns` : ''} · {s.level}</span></td>
               <td className="muted">n={s.viewsRecords} · {s.viewsLevel}</td>
               <td>{fmtMoney(s.costP50, cur)} · {fmtMoney(s.costP65, cur)}{s.factor !== 1 ? ` ×${s.factor}` : ''}</td>
               <td>{fmtInt(s.viewsP25)} · {fmtInt(s.viewsP50)} · {fmtInt(s.viewsP75)}</td>

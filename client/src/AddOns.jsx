@@ -111,6 +111,17 @@ export default function AddOns({ meta, inputs, setInputs }) {
             </select>
           </label>
         </div>
+        {(usage.rights !== 'organic' || usage.paidUsage || usage.exclusivity !== 'none') && (
+          <div className="uplift">
+            <label className="field">
+              <span>Uplift on creator cost (%) <em>required</em></span>
+              <input className={`line ${usage.upliftPct === '' || usage.upliftPct == null ? 'missing' : ''}`} type="number" min="0" step="any" placeholder="e.g. 30" value={usage.upliftPct ?? ''} onChange={(e) => setUsage({ upliftPct: e.target.value })} />
+            </label>
+            <p className="muted small">
+              Internal reference only: one UK finance creator went from about £1,200 to £1,800 per video with extended licensing (+50%). Not applied automatically.
+            </p>
+          </div>
+        )}
       </div>
 
       <div className="addon">

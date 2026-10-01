@@ -130,7 +130,7 @@ export async function getDeal(id) {
 export async function syncApprovedPackage(dealId, pkg, fxPerGbp) {
   const r = pkg.result;
   const price = r.client.price; // final quote, after any commercial adjustment
-  const margin = r.internal.expectedMargin; // effective margin at that price
+  const margin = r.internal.expectedMargin; // service gross margin at that price (excludes pass-through media)
   const f = config.pdFields;
   const body = {
     value: price,
@@ -156,7 +156,7 @@ export async function syncApprovedPackage(dealId, pkg, fxPerGbp) {
   const content = [
     `<b>Approved package: ${escapeHtml(pkg.name)}</b>`,
     `<p>${escapeHtml([r.inputs.campaign, (r.inputs.platforms || []).join(' & '), (r.inputs.markets || []).join(', '), r.inputs.niche].filter(Boolean).join(' · '))}</p>
-    <p>Price: ${r.currency} ${fmt(price)} · Margin: ${(margin * 100).toFixed(1)}%` +
+    <p>Price: ${r.currency} ${fmt(price)} · Service margin: ${(margin * 100).toFixed(1)}% (blended ${((r.internal.blendedMargin ?? margin) * 100).toFixed(1)}%)` +
       (r.internal.adjusted
         ? ` · Standard quote ${r.currency} ${fmt(r.internal.standardPrice)} (${r.internal.adjustmentPct > 0 ? '+' : ''}${r.internal.adjustmentPct.toFixed(1)}%${r.internal.commercial?.reason ? `, ${escapeHtml(r.internal.commercial.reason)}` : ''})`
         : '') +

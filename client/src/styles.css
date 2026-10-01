@@ -245,3 +245,7 @@ textarea.line { resize: vertical; font: inherit; font-size: 15px; }
 .toggle-group button { white-space: nowrap; }
 .addon .row3 > .field:has(.toggle-group) { grid-column: span 1; }
 .addon .toggle-group { width: max-content; }
+
+.review { display: flex; flex-direction: column; gap: 14px; border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; }
+.uplift { display: flex; flex-direction: column; gap: 6px; background: var(--panel); border-radius: 10px; padding: 12px 14px; }
+.line.missing { border-bottom-color: var(--pink); }

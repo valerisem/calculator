@@ -75,6 +75,9 @@ export function normaliseInputs(raw, settings) {
     rights: USAGE_RIGHTS.includes(raw.usage?.rights) ? raw.usage.rights : 'organic',
     paidUsage: !!raw.usage?.paidUsage,
     exclusivity: EXCLUSIVITY.includes(raw.usage?.exclusivity) ? raw.usage.exclusivity : 'none',
+    // Uplift on creator cost (%), entered per proposal. Required when anything
+    // beyond organic-only / no exclusivity is chosen; there is no default.
+    upliftPct: optNum(raw.usage?.upliftPct),
   };
 
   const c = raw.commercial || {};
@@ -125,7 +128,8 @@ export function normaliseInputs(raw, settings) {
  * set to "pass-through"; their management fees are added on top.
  *   standard quote = margin costs ÷ (1 − margin) + pass-through spend + fees
  *   final quote    = standard × (1 + adjustment) or a typed final price
- *   margin         = (quote − all delivery costs) ÷ quote
+ *   service margin = (quote − pass-through − service costs) ÷ (quote − pass-through)
+ *   blended margin = (quote − all delivery costs) ÷ quote (secondary)
  */
 export function calculate(rawInputs, ctx) {
   const { archetypes, factors, settings, fx } = ctx;
@@ -142,15 +146,11 @@ export function calculate(rawInputs, ctx) {
   if (!inp.markets.length) return fail('Choose a market.');
 
   // Usage rights and exclusivity raise what creators cost us.
-  const uplift =
-    num(settings.usageRightsUplift?.[inp.usage.rights]) +
-    (inp.usage.paidUsage ? num(settings.paidUsageUplift) : 0) +
-    num(settings.exclusivityUplift?.[inp.usage.exclusivity]);
-  const upliftUnset =
-    (inp.usage.rights !== 'organic' && !num(settings.usageRightsUplift?.[inp.usage.rights])) ||
-    (inp.usage.paidUsage && !num(settings.paidUsageUplift)) ||
-    (inp.usage.exclusivity !== 'none' && !num(settings.exclusivityUplift?.[inp.usage.exclusivity]));
-  if (upliftUnset) warnings.push('Usage rights / exclusivity uplift is set to 0% in Settings, so it adds no cost yet.');
+  const needsUplift = inp.usage.rights !== 'organic' || inp.usage.paidUsage || inp.usage.exclusivity !== 'none';
+  if (needsUplift && inp.usage.upliftPct == null) {
+    return fail('Enter the usage rights / exclusivity uplift % for this proposal.');
+  }
+  const uplift = needsUplift ? inp.usage.upliftPct / 100 : 0;
 
   // Section 3: cost row (spec fallback) and views row (minimum-sample rule) per creator type.
   const minSample = settings.guaranteeMinSample || 10;
@@ -178,6 +178,8 @@ export function calculate(rawInputs, ctx) {
         records: Math.min(row.n_cost, row.n_views),
         costP50: row.cost_p50 * (1 + uplift),
         costP65: row.cost_p65 * (1 + uplift),
+        costP80: row.cost_p80 == null ? null : row.cost_p80 * (1 + uplift),
+        campaigns: row.n_campaigns ?? null,
         viewsLevel: vrow.levelLabel,
         viewsRecords: vrow.n_views,
         viewsThin: vrow.thin,
@@ -287,8 +289,25 @@ export function calculate(rawInputs, ctx) {
     ? inp.commercial.finalPrice
     : Math.round(standard * (1 + inp.commercial.adjustmentPct / 100));
   const finalGbp = toGbp(finalPrice);
-  const standardMargin = (standardGbp - deliveryGbp) / standardGbp;
-  const effectiveMargin = (finalGbp - deliveryGbp) / finalGbp;
+  // Service gross margin: excludes pass-through spend (paid media, pass-through
+  // boosting) from both revenue and cost. This is the margin we warn on.
+  // Blended contribution margin includes them and is shown as a secondary metric.
+  const serviceCostGbp = allocatedGbp + marginAddOnsGbp;
+  const serviceMargin = (q) => (q - passGbp > 0 ? (q - passGbp - serviceCostGbp) / (q - passGbp) : null);
+  const standardMargin = serviceMargin(standardGbp);
+  const effectiveMargin = serviceMargin(finalGbp);
+  const standardBlended = (standardGbp - deliveryGbp) / standardGbp;
+  const effectiveBlended = (finalGbp - deliveryGbp) / finalGbp;
+
+  // Minimum viable package: the fewest creators the requirements allow, all of
+  // the cheapest allowed creator type, plus this proposal's add-ons and media.
+  const cheapest = Math.min(
+    ...inp.allowedSizes.flatMap((size) => inp.platforms.flatMap((p) => inp.markets.map((m) => rateFor(p, m, size)?.packageCostGbp ?? Infinity))),
+  );
+  const minCreatorsNeeded = Math.max(1, inp.minCreators || 0, inp.requiredVideos ? Math.ceil(Math.max(0, inp.requiredVideos - giftedPosts) / v) : 0);
+  const minimumViableGbp = Number.isFinite(cheapest)
+    ? (minCreatorsNeeded * cheapest + marginAddOnsGbp) / (1 - M) + passGbp + feesGbp
+    : null;
   const adjusted = Math.abs(finalPrice - standard) >= 1;
 
   // Section 4, step 4: simulation, overall and per tier.
@@ -321,8 +340,12 @@ export function calculate(rawInputs, ctx) {
   }
 
   const boostedViews = boosts.reduce((s, b) => s + b.views, 0);
-  if (finalGbp < settings.minimumBudgetGbp) warnings.push(`Budget is below the £${settings.minimumBudgetGbp.toLocaleString('en-GB')} minimum.`);
-  if (effectiveMargin < settings.marginWarning) warnings.push(`Margin ${(effectiveMargin * 100).toFixed(1)}% is below ${settings.marginWarning * 100}%.`);
+  if (minimumViableGbp != null && finalGbp < minimumViableGbp - 0.5) {
+    warnings.push(`Price is below the minimum viable package for these markets, platforms and requirements (${fmtMoney(fromGbp(minimumViableGbp), inp.currency)}).`);
+  }
+  if (effectiveMargin != null && effectiveMargin < settings.marginWarning) {
+    warnings.push(`Service margin ${(effectiveMargin * 100).toFixed(1)}% is below ${settings.marginWarning * 100}%.`);
+  }
   for (const l of lines) {
     if (l.lowFallback) warnings.push(`${l.label} (${l.platform}, ${l.market}): cost from Low-confidence data (${l.records} records).`);
     if (l.viewsThin) warnings.push(`${l.label} (${l.platform}, ${l.market}): only ${l.viewsRecords} view records even at "${l.viewsLevel}", so the guarantee is less reliable.`);
@@ -343,7 +366,10 @@ export function calculate(rawInputs, ctx) {
       targetViewsPerVideo: Math.round(l.viewsP50),
       videos: v,
       firstOfferPerVideo: round2(fromGbp(settings.firstOfferShare * l.costP50)),
+      // P65: the fee the package is costed at. P80: above it needs approval / re-optimising.
+      planningAllowancePerVideo: round2(fromGbp(l.costP65 * l.factor)),
       maxFeePerVideo: round2(fromGbp(l.costP65 * l.factor)),
+      approvalThresholdPerVideo: l.costP80 == null ? null : round2(fromGbp(l.costP80 * l.factor)),
     };
   });
 
@@ -380,8 +406,13 @@ export function calculate(rawInputs, ctx) {
       adjusted,
       adjustmentPct: round4(standard ? (finalPrice / standard - 1) * 100 : 0),
       commercial: inp.commercial,
-      standardMargin: round4(standardMargin),
-      expectedMargin: round4(effectiveMargin),
+      standardMargin: standardMargin == null ? null : round4(standardMargin),
+      expectedMargin: effectiveMargin == null ? null : round4(effectiveMargin),
+      standardBlendedMargin: round4(standardBlended),
+      blendedMargin: round4(effectiveBlended),
+      marginWarning: settings.marginWarning,
+      minimumViablePrice: minimumViableGbp == null ? null : Math.ceil(fromGbp(minimumViableGbp)),
+      minimumViableCreators: minCreatorsNeeded,
       creatorMoney: round2(fromGbp(creatorMoneyGbp)),
       creatorMoneyAllocated: round2(fromGbp(allocatedGbp)),
       buffer: round2(fromGbp(Math.max(0, creatorMoneyGbp - allocatedGbp))),
@@ -413,6 +444,8 @@ export function calculate(rawInputs, ctx) {
         viewsRecords: s.viewsRecords,
         costP50: round2(fromGbp(s.costP50)),
         costP65: round2(fromGbp(s.costP65)),
+        costP80: s.costP80 == null ? null : round2(fromGbp(s.costP80)),
+        campaigns: s.campaigns,
         factor: round4(s.factor),
         packageCost: round2(fromGbp(s.packageCostGbp)),
         viewsP25: Math.round(s.viewsP25),
@@ -424,6 +457,10 @@ export function calculate(rawInputs, ctx) {
     },
     warnings,
   };
+}
+
+function fmtMoney(n, cur) {
+  return new Intl.NumberFormat('en-GB', { style: 'currency', currency: cur, maximumFractionDigits: 0 }).format(n);
 }
 
 function fail(error) {

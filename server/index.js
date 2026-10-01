@@ -146,10 +146,10 @@ api.get('/proposals/:id', wrap(async (req, res) => {
 const PERSONAL_SETTINGS = [
   'giftingCostPerCreatorGbp', 'giftedPostingRate', 'boostingCostPer1000Usd', 'paidMediaFee',
   'firstOfferShare', 'minimumBudgetGbp', 'marginWarning', 'balancedSizeBonus', 'balancedCreatorBonus',
-  'guaranteeMinSample', 'paidUsageUplift',
+  'guaranteeMinSample',
 ];
 // Settings that are small tables of numbers (merged key by key).
-const PERSONAL_TABLES = ['boostingCpmUsd', 'usageRightsUplift', 'exclusivityUplift'];
+const PERSONAL_TABLES = ['boostingCpmUsd'];
 
 async function calcContext(inputs = {}) {
   const [settings, rates, fx] = await Promise.all([getSettings(), getRates(), getFx()]);
@@ -311,6 +311,22 @@ api.post('/packages/:id/approve', wrap(async (req, res) => {
   await logEvent({ proposalId: pkg.proposal_id, packageId: pkg.id, action: 'package_approved', actor: req.user.label });
   const sync = await syncToPipedrive(approved, req.user.label);
   res.json({ package: approved, pipedrive: sync });
+}));
+
+// Delivery check by the campaign team: not_reviewed | cm_reviewed | confirmed.
+api.put('/packages/:id/review', wrap(async (req, res) => {
+  const status = ['not_reviewed', 'cm_reviewed', 'confirmed'].includes(req.body?.status) ? req.body.status : null;
+  if (!status) return res.status(400).json({ error: 'Unknown delivery status.' });
+  const reviewedBy = String(req.body?.reviewedBy || '').trim() || null;
+  const pkg = await must(
+    db().from('pc_packages').update({
+      delivery_status: status,
+      reviewed_by: status === 'not_reviewed' ? null : reviewedBy,
+      reviewed_at: status === 'not_reviewed' ? null : new Date().toISOString(),
+    }).eq('id', req.params.id).select().single(),
+  );
+  await logEvent({ proposalId: pkg.proposal_id, packageId: pkg.id, action: 'delivery_review', actor: req.user.label, payload: { status, reviewedBy } });
+  res.json(pkg);
 }));
 
 api.post('/packages/:id/unapprove', wrap(async (req, res) => {

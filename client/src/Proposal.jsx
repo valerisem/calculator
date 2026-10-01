@@ -4,6 +4,7 @@ import { fmtDate } from './format.js';
 import PackageCard, { PackageDetails } from './PackageCard.jsx';
 import SlideBox from './SlideBox.jsx';
 import Commercial from './Commercial.jsx';
+import Review from './Review.jsx';
 
 // A deal's saved packages: choose one, approve it (syncs Pipedrive), download its slide.
 export default function Proposal({ proposalId, meta, settings, onBack, onEdit, onDefaultsSaved }) {
@@ -85,6 +86,7 @@ export default function Proposal({ proposalId, meta, settings, onBack, onEdit, o
               {(pkg.result.inputs.platforms || []).join(' & ')} · {(pkg.result.inputs.markets || []).join(', ')}{pkg.result.inputs.niche ? ` · ${pkg.result.inputs.niche}` : ''} · {pkg.result.inputs.videosPerCreator} videos per creator · version {pkg.version}
             </p>
             <Commercial pkg={pkg} meta={meta} busy={busy} onSave={saveCommercial} />
+            <Review pkg={pkg} onSaved={() => load()} onError={setError} />
             <div className="actions">
               {pkg.is_approved
                 ? <button className="ghost" disabled={busy} onClick={withdraw}>Withdraw approval</button>

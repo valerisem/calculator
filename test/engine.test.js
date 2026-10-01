@@ -233,8 +233,21 @@ test('paid media is pass-through plus fee; boosting margin treatment; commercial
   assert.deepEqual(plain.client.tierGuarantees.map((t) => t.tier), ['Micro', 'Mid']);
   assert.equal(plain.client.reachPromised, null);
   assert.ok(plain.internal.viewsLow <= plain.internal.viewsExpected && plain.internal.viewsExpected <= plain.internal.viewsUpside);
-  // Usage uplift raises creator cost.
-  const s2 = { ...settings, usageRightsUplift: { ...settings.usageRightsUplift, '12m': 0.5 } };
-  const lic = calculate({ ...base, usage: { rights: '12m' } }, { ...ctx, settings: s2 });
+  // Usage uplift is a required proposal input when anything beyond organic / no exclusivity is chosen.
+  const missing = calculate({ ...base, usage: { rights: '12m' } }, ctx);
+  assert.equal(missing.ok, false);
+  assert.match(missing.error, /uplift/);
+  const lic = calculate({ ...base, usage: { rights: '12m', upliftPct: 50 } }, ctx);
   assert.ok(Math.abs(lic.internal.costs.creators - plain.internal.costs.creators * 1.5) < 1);
+  const organic = calculate({ ...base, usage: { rights: 'organic', upliftPct: 50 } }, ctx);
+  assert.equal(organic.internal.costs.creators, plain.internal.costs.creators);
+  // Service margin ignores pass-through media; blended margin does not.
+  assert.ok(Math.abs(media.internal.standardMargin - plain.internal.standardMargin) < 0.07);
+  assert.ok(media.internal.standardBlendedMargin < 0.4);
+  assert.ok(!media.warnings.some((w) => /Service margin/.test(w)));
+  // P80 approval threshold sits above the P65 planning allowance; campaign counts present.
+  for (const b of plain.internal.brief) assert.ok(b.approvalThresholdPerVideo >= b.planningAllowancePerVideo);
+  assert.ok(plain.internal.sizes.every((x) => typeof x.campaigns === 'number'));
+  // Minimum viable package.
+  assert.ok(plain.internal.minimumViablePrice > 0 && plain.internal.minimumViablePrice <= plain.client.price);
 });

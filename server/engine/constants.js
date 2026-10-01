@@ -42,6 +42,8 @@ export const DEFAULT_SETTINGS = {
   promisePercentile: 10,
   simulationRuns: 5000,
   planningPercentile: 65,
+  // Creator fees above this percentile need approval / re-optimising.
+  approvalPercentile: 80,
   giftingCostPerCreatorGbp: null, // "Set from Richie's campaigns" — must be entered
   giftedPostingRate: 0.5,
   // Reach is not shown: there is no historical reach data yet. Kept for later.
@@ -54,10 +56,6 @@ export const DEFAULT_SETTINGS = {
   // Paid media is pass-through spend plus a management fee.
   paidMediaFeeType: 'percent',
   paidMediaFee: 0,
-  // Uplift on creator cost for usage rights and exclusivity (0.5 = +50%). No data yet: set them here.
-  usageRightsUplift: { organic: 0, '30d': 0, '3m': 0, '6m': 0, '12m': 0, perpetual: 0 },
-  paidUsageUplift: 0,
-  exclusivityUplift: { none: 0, category: 0, competitor: 0 },
   firstOfferShare: 0.85,
   balancedSizeBonus: 0.05,
   balancedCreatorBonus: 0.01,

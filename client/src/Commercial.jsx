@@ -8,6 +8,8 @@ export default function Commercial({ pkg, meta, busy, onSave }) {
   const cur = r.currency;
   const standard = i.standardPrice ?? r.client.price;
   const cost = i.costs?.total ?? 0;
+  const pass = (Number(i.costs?.paidMedia) || 0) + (Number(i.costs?.boostingPassThrough) || 0);
+  const serviceMargin = (q) => (q - pass > 0 ? (q - pass - (cost - pass)) / (q - pass) : null);
   const init = () => ({
     pct: i.commercial?.finalPrice != null ? '' : i.commercial?.adjustmentPct || '',
     price: i.commercial?.finalPrice ?? '',
@@ -20,7 +22,8 @@ export default function Commercial({ pkg, meta, busy, onSave }) {
 
   const final = c.price !== '' ? Number(c.price) : Math.round(standard * (1 + (Number(c.pct) || 0) / 100));
   const pct = standard ? (final / standard - 1) * 100 : 0;
-  const margin = final ? (final - cost) / final : null;
+  const margin = serviceMargin(final);
+  const blended = final ? (final - cost) / final : null;
   const dirty = JSON.stringify(c) !== JSON.stringify(init());
   const adjusted = Math.abs(final - standard) >= 1;
 
@@ -37,9 +40,9 @@ export default function Commercial({ pkg, meta, busy, onSave }) {
     <div className="commercial">
       <h2>Commercial adjustment</h2>
       <div className="quote-row">
-        <div><span className="muted small">Calculated standard quote</span><b>{fmtMoney(standard, cur)}</b><span className="muted small">margin {fmtPct(i.standardMargin)}</span></div>
+        <div><span className="muted small">Calculated standard quote</span><b>{fmtMoney(standard, cur)}</b><span className="muted small">service margin {fmtPct(i.standardMargin)}</span></div>
         <div className="arrow">→</div>
-        <div className="final"><span className="muted small">Final quote</span><b>{fmtMoney(final, cur)}</b><span className={margin < (meta.settings.marginWarning ?? 0.4) ? 'bad small' : 'good small'}>effective margin {fmtPct(margin)}</span></div>
+        <div className="final"><span className="muted small">Final quote</span><b>{fmtMoney(final, cur)}</b><span className={margin < (meta.settings.marginWarning ?? 0.4) ? 'bad small' : 'good small'}>service margin {fmtPct(margin)}</span><span className="muted small">blended {fmtPct(blended)}</span></div>
       </div>
       <div className="row2">
         <label className="field">
