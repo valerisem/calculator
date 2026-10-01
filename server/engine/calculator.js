@@ -378,7 +378,12 @@ export function calculate(rawInputs, ctx) {
   // Section 4, step 4: simulation, overall and per tier.
   // Same groups, order and seed as the optimiser's evaluation, so Most views reports what it chose on.
   const seed = seedOf(counts);
-  const sim = simulateViews(Object.entries(counts).map(([k, m]) => groupOf({ ...combos[k], count: m })), giftedGroup, { runs, seed });
+  // Tier totals come from the same runs, so no tier's guarantee exceeds the package's.
+  const sim = simulateViews(
+    Object.entries(counts).map(([k, m]) => ({ ...groupOf({ ...combos[k], count: m }), tag: combos[k].tier })),
+    giftedGroup && { ...giftedGroup, tag: 'Gifted' },
+    { runs, seed },
+  );
   const viewsPromised = Math.floor(sim.percentile(pctl) / 10_000) * 10_000;
   const roundTier = (x) => (x >= 100_000 ? Math.floor(x / 10_000) * 10_000 : Math.floor(x / 1_000) * 1_000);
   const tierSummary = (tier, creators, videos, ts) => ({
@@ -410,17 +415,17 @@ export function calculate(rawInputs, ctx) {
     viewsPerVideoP50: Math.round(l.viewsP50),
     viewsLevel: l.viewsLevel,
   });
-  const tiers = [...new Set(lines.map((l) => l.tier))].map((tier, i) => {
+  const tiers = [...new Set(lines.map((l) => l.tier))].map((tier) => {
     const tl = lines.filter((l) => l.tier === tier);
     const creators = tl.reduce((s, l) => s + l.count, 0);
     return {
-      ...tierSummary(tier, creators, creators * v, simulateViews(tl.map(groupOf), null, { runs, seed: seed + i + 1 })),
+      ...tierSummary(tier, creators, creators * v, sim.byTag[tier]),
       creatorCost: round2(fromGbp(tl.reduce((s, l) => s + l.count * l.packageCostGbp, 0))),
       lines: tl.map(lineAudit),
     };
   });
   if (giftedGroup && gifted > 0) {
-    tiers.push(tierSummary('Gifted', gifted, giftedPosts, simulateViews([], giftedGroup, { runs, seed: seed + 99 })));
+    tiers.push(tierSummary('Gifted', gifted, giftedPosts, sim.byTag.Gifted));
   }
 
   const boostedViews = boosts.reduce((s, b) => s + b.views, 0);

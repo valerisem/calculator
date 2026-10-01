@@ -283,6 +283,9 @@ test('Most views has the highest guarantee and Most videos the most videos', () 
     assert.ok(views.client.viewsPromised >= videos.client.viewsPromised);
     assert.ok(videos.client.totalVideos >= balanced.client.totalVideos && videos.client.totalVideos >= views.client.totalVideos);
     assert.equal(views.objective, 'Performance');
+    for (const r of set.recommended) {
+      for (const t of r.internal.tiers) assert.ok(t.guaranteedViews <= r.client.viewsPromised + 10_000, `${t.tier} above package`);
+    }
   }
 });
 
