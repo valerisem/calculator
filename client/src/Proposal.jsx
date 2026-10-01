@@ -5,6 +5,9 @@ import PackageCard, { PackageDetails } from './PackageCard.jsx';
 import SlideBox from './SlideBox.jsx';
 import Commercial from './Commercial.jsx';
 
+// Same order as the calculator; custom packages last.
+const KIND_ORDER = ['yours', 'performance', 'balanced', 'content', 'custom'];
+
 // A deal's saved packages: choose one, approve it (syncs Pipedrive), download its slide.
 export default function Proposal({ proposalId, meta, settings, onBack, onEdit, onDefaultsSaved }) {
   const [data, setData] = useState(null);
@@ -125,7 +128,7 @@ export default function Proposal({ proposalId, meta, settings, onBack, onEdit, o
             <button className={view === 'internal' ? 'on' : ''} onClick={() => setView('internal')}>Internal</button>
           </div>
         </div>
-        {packages.map((p) => (
+        {[...packages].sort((a, b) => KIND_ORDER.indexOf(a.mode) - KIND_ORDER.indexOf(b.mode)).map((p) => (
           <React.Fragment key={p.id}>
             <PackageCard
               title={p.name}
