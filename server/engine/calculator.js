@@ -313,3 +313,50 @@ export function calculateSet(rawInputs, ctx) {
     : [];
   return { ok: true, yours, recommended };
 }
+
+/**
+ * Fills "Your creators" from a number of creators.
+ * With a client budget: the Balanced package with exactly that many creators.
+ * Without one: the creators are split across sizes the way past bookings for
+ * these markets and platforms were (rate table records), spread evenly over
+ * the chosen markets and platforms.
+ */
+export function suggestMix(rawInputs, creators, ctx) {
+  const N = Math.max(0, Math.round(Number(creators) || 0));
+  if (!N) return { ok: true, package: {} };
+  const inp = normaliseInputs(rawInputs, ctx.settings);
+  if (!inp.markets.length) return { ok: false, error: 'Choose a market.' };
+  if (Number(rawInputs.budget) > 0) {
+    const r = calculate({ ...rawInputs, mode: 'budget', objective: 'Balanced', minCreators: N, maxCreators: N }, ctx);
+    if (r.ok && r.client.totalCreators === N) {
+      return { ok: true, package: Object.fromEntries(r.client.creators.map((c) => [c.key, c.count])) };
+    }
+  }
+  const combos = inp.platforms.flatMap((platform) => inp.markets.map((market) => ({ platform, market })));
+  const out = {};
+  combos.forEach(({ platform, market }, i) => {
+    const share = Math.floor(N / combos.length) + (i < N % combos.length ? 1 : 0);
+    if (!share) return;
+    // Historical size mix: most specific level with data for this market and platform.
+    const weights = {};
+    for (const level of inp.niche ? [1, 2] : [2]) {
+      for (const a of ctx.archetypes) {
+        if (a.level !== level || a.market !== market || a.platform !== platform) continue;
+        if (level === 1 && a.niche !== inp.niche) continue;
+        if (!inp.allowedSizes.includes(a.size_band)) continue;
+        weights[a.size_band] = a.n_cost;
+      }
+      if (Object.keys(weights).length) break;
+    }
+    const sizes = Object.keys(weights);
+    if (!sizes.length) return;
+    const total = sizes.reduce((s, k) => s + weights[k], 0);
+    // Largest remainder so the counts add up to the share exactly.
+    const raw = sizes.map((k) => ({ k, x: (share * weights[k]) / total }));
+    raw.forEach((r) => { r.n = Math.floor(r.x); });
+    let left = share - raw.reduce((s, r) => s + r.n, 0);
+    raw.sort((a, b) => (b.x - b.n) - (a.x - a.n)).forEach((r) => { if (left > 0) { r.n++; left--; } });
+    for (const r of raw) if (r.n) out[comboKey(platform, market, r.k)] = r.n;
+  });
+  return { ok: true, package: out };
+}

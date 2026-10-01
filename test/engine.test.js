@@ -195,3 +195,14 @@ test('several markets: lines priced per market, recommendations choose across th
   assert.ok(rec.ok, rec.error);
   assert.ok(rec.client.creators.every((c) => c.market === 'Germany')); // cheaper market wins on views
 });
+
+test('number of creators fills your creators', async () => {
+  const { suggestMix } = await import('../server/engine/calculator.js');
+  const rt = buildRateTable(fakeBookings(), [{ pd_deal_id: 100, wide_niche: 'Tech', account_owner_id: 9 }], settings);
+  const ctx = { ...rt, settings, fx };
+  const base = { platforms: ['TikTok'], markets: ['UK'], niche: 'Tech', margin: 0.5, videosPerCreator: 3, currency: 'GBP' };
+  const hist = suggestMix(base, 7, ctx);
+  assert.equal(Object.values(hist.package).reduce((a, b) => a + b, 0), 7);
+  const withBudget = suggestMix({ ...base, budget: 20000 }, 7, ctx);
+  assert.equal(Object.values(withBudget.package).reduce((a, b) => a + b, 0), 7);
+});

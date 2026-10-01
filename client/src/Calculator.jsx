@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { api, notify } from './api.js';
+import { api, notify, openUrl } from './api.js';
 import DealPicker from './DealPicker.jsx';
 import PackageCard, { PackageDetails } from './PackageCard.jsx';
 import { fmtInt } from './format.js';
@@ -67,7 +67,13 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
   const [picking, setPicking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [showMore, setShowMore] = useState(false);
+  const [deal, setDeal] = useState(null);
+  const [pendingAction, setPendingAction] = useState(null); // run after a deal is picked
+  // Number of creators: while auto is on, "Your creators" is rebuilt from it and the inputs above.
+  const [creatorCount, setCreatorCount] = useState('');
+  const [auto, setAuto] = useState(false);
   const seq = useRef(0);
+  const mixSeq = useRef(0);
 
   const fullInputs = useMemo(() => ({ ...inputs, package: packageFromLines(lines) }), [inputs, lines]);
 
@@ -94,8 +100,56 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
     return () => clearTimeout(t);
   }, [fullInputs]);
 
+  const mixKey = JSON.stringify([creatorCount, inputs.platforms, inputs.markets, inputs.niche, inputs.budget, inputs.currency, inputs.margin, inputs.videosPerCreator, inputs.allowedSizes]);
+  useEffect(() => {
+    if (!auto || !inputs.markets.length) return;
+    const n = Number(creatorCount);
+    if (!(n > 0)) {
+      setLines([]);
+      return;
+    }
+    const mine = ++mixSeq.current;
+    const t = setTimeout(async () => {
+      try {
+        const r = await api('/suggest-mix', { method: 'POST', body: { inputs: { ...inputs, package: {} }, creators: n } });
+        if (mine === mixSeq.current) setLines(linesFromPackage(r.package));
+      } catch (e) {
+        if (mine === mixSeq.current) setError(e.message);
+      }
+    }, 300);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auto, mixKey]);
+
+  // Picking a deal fills in what Pipedrive knows about it.
+  const pickDeal = async (d) => {
+    setPicking(false);
+    setDeal(d);
+    try {
+      const { prefill } = await api(`/pipedrive/deals/${d.id}`);
+      const markets = (prefill.markets || []).filter((m) => meta.markets.some((x) => x.name === m));
+      const next = {
+        ...inputs,
+        campaign: inputs.campaign || prefill.campaign || '',
+        currency: meta.currencies.includes(prefill.currency) ? prefill.currency : inputs.currency,
+        budget: inputs.budget || prefill.budget || '',
+        markets: inputs.markets.length ? inputs.markets : markets,
+        niche: inputs.niche || (meta.niches.some((n) => n.name === prefill.niche) ? prefill.niche : ''),
+        paidMedia: Number(inputs.paidMedia) ? inputs.paidMedia : prefill.paidMedia || 0,
+      };
+      setInputs(next);
+    } catch (e) {
+      setError(e.message);
+    }
+    if (pendingAction) {
+      const action = pendingAction;
+      setPendingAction(null);
+      action(d);
+    }
+  };
+
   const cards = [
-    { kind: 'yours', name: 'Your creators', priceLabel: 'Price to quote', result: set?.yours, empty: 'Add creators below to price the package the client asked for.' },
+    { kind: 'yours', name: 'Your creators', priceLabel: 'Price to quote', result: set?.yours, empty: 'Enter the number of creators or add them below.' },
     ...(set?.recommended?.length
       ? set.recommended.map((r) => ({ kind: r.kind, name: r.name, objective: r.objective, priceLabel: 'Price', result: r }))
       : [
@@ -110,10 +164,16 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
   const savable = cards.filter((c) => c.result?.ok);
 
   const set1 = (k) => (e) => setInputs({ ...inputs, [k]: e.target.value });
+  // Editing a line by hand stops the automatic fill.
+  const editLines = (next) => {
+    setAuto(false);
+    setLines(next);
+    setCreatorCount(String(next.reduce((a, l) => a + (Number(l.count) || 0), 0) || ''));
+  };
   const totals = lines.reduce((a, l) => ({ creators: a.creators + (Number(l.count) || 0) }), { creators: 0 });
 
   const useMix = (card) => {
-    setLines(card.result.client.creators.map((c, i) => ({ id: `${c.key}-${Date.now()}-${i}`, platform: c.platform, market: c.market, size: c.size, count: c.count })));
+    editLines(card.result.client.creators.map((c, i) => ({ id: `${c.key}-${Date.now()}-${i}`, platform: c.platform, market: c.market, size: c.size, count: c.count })));
     setSelected('yours');
   };
 
@@ -122,9 +182,9 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
     const market = inputs.markets[0] || '';
     const used = new Set(lines.filter((l) => l.platform === platform && l.market === market).map((l) => l.size));
     const size = meta.sizes.find((s) => !used.has(s.key))?.key || meta.sizes[0].key;
-    setLines([...lines, { id: `${size}-${Date.now()}`, platform, market, size, count: 1 }]);
+    editLines([...lines, { id: `${size}-${Date.now()}`, platform, market, size, count: 1 }]);
   };
-  const setLine = (idx, patch) => setLines(lines.map((x, j) => (j === idx ? { ...x, ...patch } : x)));
+  const setLine = (idx, patch) => editLines(lines.map((x, j) => (j === idx ? { ...x, ...patch } : x)));
   const togglePlatform = (p) => {
     const on = inputs.platforms.includes(p);
     if (on && inputs.platforms.length === 1) return; // at least one platform
@@ -133,16 +193,26 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
   const optionsWith = (list, current) => (current && !list.includes(current) ? [...list, current] : list);
 
   // Create proposal: every priced option is saved to the deal, chosen one first.
-  const createProposal = async (deal) => {
+  // Saves every priced option to the deal's proposal (chosen one first).
+  const save = async (d, { slide = false } = {}) => {
+    if (!d) {
+      setPendingAction(() => (picked) => save(picked, { slide }));
+      setPicking(true);
+      return;
+    }
     setBusy(true);
     try {
-      const { proposal } = await api('/proposals', { method: 'POST', body: { pdDealId: deal.id, campaignName: inputs.campaign } });
+      const { proposal } = await api('/proposals', { method: 'POST', body: { pdDealId: d.id, campaignName: inputs.campaign } });
       const ordered = [selectedCard, ...savable.filter((c) => c.kind !== selectedKind)].filter((c) => c?.result?.ok);
-      await api(`/proposals/${proposal.id}/packages`, {
+      const saved = await api(`/proposals/${proposal.id}/packages`, {
         method: 'POST',
         body: { packages: ordered.map((c) => ({ name: c.name, kind: c.kind, inputs: packageInputs(fullInputs, c) })) },
       });
-      notify('Proposal created');
+      if (slide && saved[0]) {
+        const { url } = await api(`/packages/${saved[0].id}/slide-link`, { method: 'POST' });
+        openUrl(url);
+      }
+      notify('Proposal saved');
       onOpenProposal(proposal.id);
     } catch (e) {
       setError(e.message);
@@ -169,7 +239,21 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
     <div className="split">
       <section className="left">
         <h1 className="title">Creator calculator</h1>
-        {editing && <p className="muted small">Editing a saved package. Pick the option to keep and save it back to the proposal.</p>}
+        {!editing && (
+          <div className="field">
+            <span>Pipedrive deal</span>
+            {deal ? (
+              <div className="chips">
+                <span className="chip-dark">
+                  {deal.title}{deal.orgName ? ` · ${deal.orgName}` : ''}
+                  <button aria-label="Change deal" onClick={() => setDeal(null)}>×</button>
+                </span>
+              </div>
+            ) : (
+              <button className="add" onClick={() => setPicking(true)}>Pick or create deal <span>+</span></button>
+            )}
+          </div>
+        )}
 
         <label className="field">
           <span>Campaign</span>
@@ -177,7 +261,7 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
         </label>
 
         <div className="field">
-          <span>Platforms <em>· recommended packages can use any of them</em></span>
+          <span>Platforms</span>
           <div className="pills">
             {meta.platforms.map((p) => (
               <button key={p} className={`pill ${inputs.platforms.includes(p) ? 'on' : ''}`} onClick={() => togglePlatform(p)}>
@@ -188,21 +272,21 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
         </div>
 
         <div className="field">
-          <span>Markets <em>· recommended packages can use any of them</em></span>
+          <span>Markets</span>
           <MultiChipPicker
             values={inputs.markets}
             placeholder="Add market"
-            options={meta.markets.map((m) => ({ value: m.name, label: m.name, hint: `${m.records} records` }))}
+            options={meta.markets.map((m) => ({ value: m.name, label: m.name }))}
             onChange={(markets) => setInputs({ ...inputs, markets })}
           />
         </div>
 
         <div className="field">
-          <span>Niche <em>· optional</em></span>
+          <span>Niche</span>
           <ChipPicker
             value={inputs.niche}
             placeholder="Add niche"
-            options={meta.niches.map((n) => ({ value: n.name, label: n.name, hint: `${n.records} records` }))}
+            options={meta.niches.map((n) => ({ value: n.name, label: n.name }))}
             onChange={(v) => setInputs({ ...inputs, niche: v })}
           />
         </div>
@@ -230,10 +314,17 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
             <strong className="slider-value">{inputs.videosPerCreator}</strong>
             <input type="range" min="1" max="10" step="1" value={inputs.videosPerCreator} onChange={(e) => setInputs({ ...inputs, videosPerCreator: Number(e.target.value) })} />
           </label>
-          <div className="field">
-            <span>&nbsp;</span>
-            <p className="muted small">Same for every creator. Money short? Creators are removed, never videos.</p>
-          </div>
+          <label className="field">
+            <span>Number of creators</span>
+            <input
+              className="line"
+              type="number"
+              min="0"
+              placeholder="e.g. 7"
+              value={creatorCount}
+              onChange={(e) => { setCreatorCount(e.target.value); setAuto(true); }}
+            />
+          </label>
         </div>
 
         <div className="dash" />
@@ -242,7 +333,6 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
           <h2>Your creators</h2>
           <span className="muted small">{fmtInt(totals.creators)} creators · {fmtInt(totals.creators * inputs.videosPerCreator)} videos</span>
         </div>
-        <p className="muted small">The package the client asked for. It is priced as a quote at your target margin.</p>
         {lines.map((l, idx) => (
           <div className="creator-line" key={l.id}>
             <div className="line-row top">
@@ -254,7 +344,7 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
                 <span>Videos each</span>
                 <div className="line static">{inputs.videosPerCreator}</div>
               </div>
-              <button className="icon" aria-label="Remove line" onClick={() => setLines(lines.filter((_, j) => j !== idx))}>×</button>
+              <button className="icon" aria-label="Remove line" onClick={() => editLines(lines.filter((_, j) => j !== idx))}>×</button>
             </div>
             <div className="line-row">
               <label className="field">
@@ -356,17 +446,19 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
         ))}
 
         <div className="right-foot">
-          <p className="muted small">
-            Indicative only. Views we promise are beaten in 9 of 10 simulated campaigns. Boosted views are never part of the promise.
-          </p>
           {editing ? (
             <button className="cta" disabled={busy || !selectedCard?.result?.ok} onClick={saveEdit}>
               Save to proposal <span>›</span>
             </button>
           ) : (
-            <button className="cta" disabled={busy || !savable.length} onClick={() => setPicking(true)}>
-              Create proposal <span>›</span>
-            </button>
+            <>
+              <button className="ghost" disabled={busy || !selectedCard} onClick={() => save(deal, { slide: true })}>
+                Download slide
+              </button>
+              <button className="cta" disabled={busy || !savable.length} onClick={() => save(deal)}>
+                Create proposal <span>›</span>
+              </button>
+            </>
           )}
         </div>
       </section>
@@ -376,8 +468,8 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
           defaultTitle={inputs.campaign}
           currency={inputs.currency}
           busy={busy}
-          onClose={() => setPicking(false)}
-          onPick={createProposal}
+          onClose={() => { setPicking(false); setPendingAction(null); }}
+          onPick={pickDeal}
         />
       )}
     </div>
@@ -428,7 +520,7 @@ function ChipPicker({ value, placeholder, options, onChange }) {
             {shown.map((o) => (
               <li key={o.value}>
                 <button onClick={() => { onChange(o.value); setOpen(false); setQ(''); }}>
-                  {o.label} <span className="muted small">{o.hint}</span>
+                  {o.label}
                 </button>
               </li>
             ))}

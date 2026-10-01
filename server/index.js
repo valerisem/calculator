@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { requireMonday, signDownload, verifyDownload } from './auth.js';
 import { config } from './config.js';
 import { db, getRates, getSettings, logEvent, must, rebuildRates, saveSettings, supabase } from './db.js';
-import { calculate, calculateSet } from './engine/calculator.js';
+import { calculate, calculateSet, suggestMix } from './engine/calculator.js';
 import { OBJECTIVES, PLATFORMS, SIZE_BANDS } from './engine/constants.js';
 import { CURRENCIES, getFx } from './fx.js';
 import * as pipedrive from './pipedrive.js';
@@ -70,6 +70,8 @@ api.put('/settings', wrap(async (req, res) => res.json(await saveSettings(req.bo
 // ---- Pipedrive -------------------------------------------------------------
 
 api.get('/pipedrive/deals', wrap(async (req, res) => res.json(await pipedrive.listDeals(req.query.term))));
+// Deal + values to prefill the calculator (nothing is saved).
+api.get('/pipedrive/deals/:id', wrap(async (req, res) => res.json(await pipedrive.getDeal(Number(req.params.id)))));
 api.get('/pipedrive/orgs', wrap(async (req, res) => res.json(await pipedrive.searchOrganizations(req.query.term))));
 api.post('/pipedrive/deals', wrap(async (req, res) => {
   const { title, orgId, orgName, currency, value } = req.body || {};
@@ -147,6 +149,13 @@ api.post('/calculate', wrap(async (req, res) => {
   const { ctx } = await calcContext();
   const set = calculateSet(req.body?.inputs || {}, ctx);
   res.status(set.ok ? 200 : 422).json(set);
+}));
+
+// Number of creators -> "Your creators" lines.
+api.post('/suggest-mix', wrap(async (req, res) => {
+  const { ctx } = await calcContext();
+  const out = suggestMix(req.body?.inputs || {}, req.body?.creators, ctx);
+  res.status(out.ok ? 200 : 422).json(out);
 }));
 
 const KINDS = ['yours', 'performance', 'balanced', 'content', 'custom'];

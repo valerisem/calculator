@@ -95,13 +95,13 @@ export async function getDeal(id) {
   const r = await pd(`/deals/${id}`);
   const d = r.data;
   const deal = dealSummary(d);
-  const prefill = { currency: d.currency, budget: d.value || null };
+  const prefill = { campaign: d.title, currency: d.currency, budget: d.value || null };
   try {
     const raw = d[config.pdFields.targetCountry];
     if (raw) {
       const labels = await optionLabels(config.pdFields.targetCountry);
-      const first = String(raw).split(',')[0];
-      prefill.market = normaliseMarket(labels[first] || first);
+      // Target Country can hold several countries.
+      prefill.markets = [...new Set(String(raw).split(',').map((id) => normaliseMarket(labels[id.trim()] || id.trim())).filter(Boolean))];
     }
     const pm = d[config.pdFields.paidMediaSpend];
     if (pm) prefill.paidMedia = Number(pm);
