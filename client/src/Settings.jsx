@@ -7,8 +7,7 @@ const pct = (x) => `${Math.round(Number(x) * 1000) / 10}%`;
 // [key, label, type, sub-key for settings that are small tables]
 export const PERSONAL_GROUPS = [
   ['General', [
-    ['giftingCostPerCreatorGbp', 'Cost per gift (£)', 'number'],
-    ['giftedPostingRate', 'Gifted creators who post (%)', 'percent'],
+    ['giftedPostingRate', 'Default gifted creator posting rate (%)', 'percent'],
     ['firstOfferShare', 'First offer, share of typical fee (%)', 'percent'],
     ['marginWarning', 'Warn when margin is below (%)', 'percent'],
     ['minimumBudgetGbp', 'Warn when budget is below (£)', 'number'],
@@ -63,7 +62,7 @@ export function SettingsPanel({ defaults, values, onChange, onDefaultsSaved }) {
       <button className="strip-head" onClick={() => setOpen(!open)}>
         <span className="strip-title">Settings</span>
         <span className="strip-summary">
-          Gift {v.giftingCostPerCreatorGbp == null ? 'not set' : `£${v.giftingCostPerCreatorGbp}`} · Boosting CPM TikTok ${v.boostingCpmUsd?.TikTok} · Meta ${v.boostingCpmUsd?.Instagram} · Paid media fee {v.paidMediaFee}% · First offer {pct(v.firstOfferShare)}
+          Gifted posting {pct(v.giftedPostingRate)} · Boosting CPM TikTok ${v.boostingCpmUsd?.TikTok} · Meta ${v.boostingCpmUsd?.Instagram} · Paid media fee {v.paidMediaFee}% · First offer {pct(v.firstOfferShare)}
           {changed.length > 0 && <em> · {changed.length} changed</em>}
         </span>
         <span className="strip-toggle">{open ? '−' : '+'}</span>
@@ -112,13 +111,13 @@ export function HowItWorks({ v }) {
       </div>
       <div className="howto-block">
         <h3>2. Price to quote</h3>
-        <div className="formula">Standard quote = (creators + gifting + brand-lift / other + boosting with margin) ÷ (1 − margin) + paid media + pass-through boosting + management fees</div>
+        <div className="formula">Standard quote = (creators + gifting without a client charge + brand-lift / other + boosting with margin) ÷ (1 − margin) + paid media + pass-through boosting + management fees + client gifting charge</div>
         <div className="formula">Final quote = standard quote × (1 + commercial adjustment)</div>
         <p>Paid media is passed through at cost plus a management fee; it never gets the campaign margin.</p>
       </div>
       <div className="howto-block">
         <h3>3. Package from a budget</h3>
-        <div className="formula">Creator money = (budget − paid media − pass-through boosting − fees) × (1 − margin) − gifting − brand-lift / other − boosting with margin</div>
+        <div className="formula">Creator money = (budget − paid media − pass-through boosting − fees − client gifting charge) × (1 − margin) − gifting without a client charge − brand-lift / other − boosting with margin</div>
         <p>
           <b>Most views</b> fits the most views into the creator money. <b>Balanced</b> also rewards a mix (+{pct(v.balancedSizeBonus)} per extra size, +{pct(v.balancedCreatorBonus)} per extra creator).
           <b> Most videos</b> fits the most videos, then the most views. What's left is the negotiation buffer.
@@ -151,7 +150,7 @@ export function HowItWorks({ v }) {
           <dt>Creator brief</dt>
           <dd>First offer {pct(v.firstOfferShare)} of the typical (P50) fee; planning allowance P65; above P80 needs approval.</dd>
           <dt>Gifting</dt>
-          <dd>{v.giftingCostPerCreatorGbp == null ? 'Cost not set (counted as £0)' : `£${v.giftingCostPerCreatorGbp} per gifted creator`}; {pct(v.giftedPostingRate)} of them post one video.</dd>
+          <dd>Set per proposal: creators × (product + shipping) is a delivery cost. Without a client gifting charge it carries the campaign margin; with one, the charge is added to the quote. By default {pct(v.giftedPostingRate)} of gifted creators post one video.</dd>
         </dl>
       </div>
     </div>

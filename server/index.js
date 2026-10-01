@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { requireMonday, signDownload, verifyDownload } from './auth.js';
 import { config } from './config.js';
 import { db, getRates, getSettings, logEvent, must, rebuildRates, saveSettings, supabase } from './db.js';
-import { ADJUSTMENT_REASONS, BOOST_PLATFORMS, EXCLUSIVITY, PRICING_CONTEXTS, USAGE_RIGHTS, calculate, calculateSet, suggestMix } from './engine/calculator.js';
+import { ADJUSTMENT_REASONS, BOOST_PLATFORMS, EXCLUSIVITY, PRICING_CONTEXTS, RECOMMENDATIONS, USAGE_RIGHTS, calculate, suggestMix } from './engine/calculator.js';
+import { calculateInWorker } from './calc-pool.js';
 import { OBJECTIVES, PLATFORMS, SIZE_BANDS } from './engine/constants.js';
 import { CURRENCIES, getFx } from './fx.js';
 import * as pipedrive from './pipedrive.js';
@@ -145,7 +146,7 @@ api.get('/proposals/:id', wrap(async (req, res) => {
 // Settings a person can change for their own calculation (inputs.settings).
 // Saved packages keep them in their inputs, so they re-price the same way.
 const PERSONAL_SETTINGS = [
-  'giftingCostPerCreatorGbp', 'giftedPostingRate', 'boostingCostPer1000Usd', 'paidMediaFee',
+  'giftedPostingRate', 'boostingCostPer1000Usd', 'paidMediaFee',
   'firstOfferShare', 'minimumBudgetGbp', 'marginWarning', 'balancedSizeBonus', 'balancedCreatorBonus',
   'guaranteeMinSample',
 ];
@@ -175,11 +176,30 @@ async function runCalc(inputs) {
   return { result: calculate(inputs, ctx), buildId };
 }
 
-// The calculator screen: your creators + suggested mixes at the same price.
+// The calculator screen: your creators + a recommended package per objective.
+// Each package runs in a worker thread, in parallel; recent answers are cached.
+const calcCache = new Map();
+const CACHE_SIZE = 300;
 api.post('/calculate', wrap(async (req, res) => {
-  const { ctx } = await calcContext(req.body?.inputs);
-  const set = calculateSet(req.body?.inputs || {}, ctx);
-  res.status(set.ok ? 200 : 422).json(set);
+  const raw = req.body?.inputs || {};
+  const { ctx, buildId } = await calcContext(raw);
+  const { campaign, ...priced } = raw; // the campaign name doesn't change the numbers
+  const key = JSON.stringify([buildId, ctx.fx, priced]);
+  if (calcCache.has(key)) return res.json(calcCache.get(key));
+  const hasCreators = Object.values(raw.package || {}).some((n) => Number(n) > 0);
+  const budget = Number(raw.budget) > 0;
+  const [yours, ...recommended] = await Promise.all([
+    hasCreators ? calculateInWorker({ ...raw, mode: 'package' }, ctx, buildId) : null,
+    ...(budget
+      ? RECOMMENDATIONS.map((r) =>
+          calculateInWorker({ ...raw, mode: 'budget', objective: r.objective, commercial: {} }, ctx, buildId).then((x) => ({ ...r, ...x })),
+        )
+      : []),
+  ]);
+  const set = { ok: true, yours, recommended };
+  calcCache.set(key, set);
+  if (calcCache.size > CACHE_SIZE) calcCache.delete(calcCache.keys().next().value);
+  res.json(set);
 }));
 
 // Number of creators -> "Your creators" lines.

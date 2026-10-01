@@ -6,7 +6,7 @@ import { optimise } from '../server/engine/optimiser.js';
 import { buildRateTable, normaliseMarket, pickArchetype } from '../server/engine/rates.js';
 import { simulateViews } from '../server/engine/simulate.js';
 
-const settings = { ...DEFAULT_SETTINGS, giftingCostPerCreatorGbp: 50, rateOwnerIds: [] };
+const settings = { ...DEFAULT_SETTINGS, rateOwnerIds: [] };
 const fx = { GBP: 1, USD: 1.25, EUR: 1.15 };
 
 // Brute force over small counts, Performance objective.
@@ -250,4 +250,25 @@ test('paid media is pass-through plus fee; boosting margin treatment; commercial
   assert.ok(plain.internal.sizes.every((x) => typeof x.campaigns === 'number'));
   // Minimum viable package.
   assert.ok(plain.internal.minimumViablePrice > 0 && plain.internal.minimumViablePrice <= plain.client.price);
+});
+
+test('gifting: internal cost carries margin unless a client charge is set', () => {
+  const rt = buildRateTable(fakeBookings(), [{ pd_deal_id: 100, wide_niche: 'Tech', account_owner_id: 9 }], settings);
+  const ctx = { ...rt, settings, fx };
+  const base = { markets: ['UK'], platforms: ['TikTok'], niche: 'Tech', margin: 0.5, videosPerCreator: 3, currency: 'GBP', mode: 'package', package: { 'TikTok|UK|micro_25k_50k': 4 } };
+  const plain = calculate(base, ctx);
+  const gifting = { enabled: true, creators: 10, productCost: 30, shippingCost: 10 };
+  // 10 × (£30 + £10) = £400 cost; at 50% margin the quote rises by £800.
+  const g = calculate({ ...base, gifting }, ctx);
+  assert.ok(Math.abs(g.internal.standardPrice - plain.internal.standardPrice - 800) <= 1);
+  assert.equal(g.internal.gifting.posts, Math.floor(10 * settings.giftedPostingRate));
+  assert.equal(g.internal.costs.gifting, 400);
+  // With a £500 client charge, the quote rises by the charge and the £400 stays a delivery cost.
+  const c = calculate({ ...base, gifting: { ...gifting, clientCharge: 500, postingRate: 0.3 } }, ctx);
+  assert.ok(Math.abs(c.internal.standardPrice - plain.internal.standardPrice - 500) <= 1);
+  assert.equal(c.internal.gifting.posts, 3);
+  assert.ok(Math.abs(c.internal.costs.total - plain.internal.costs.total - 400) <= 1);
+  // Off means no gifting at all; missing costs are an error.
+  assert.equal(calculate({ ...base, gifting: { ...gifting, enabled: false } }, ctx).internal.gifting, null);
+  assert.equal(calculate({ ...base, gifting: { enabled: true, creators: 5 } }, ctx).ok, false);
 });

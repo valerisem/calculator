@@ -91,43 +91,66 @@ export function optimise(p) {
   // creators it adds and whether the chain started from "group not used yet".
   const trail = [];
 
-  for (const group of groups) {
+  // Strides for idx(c, n, s, b) = ((c * nDim + n) * sDim + s) * bDim + b.
+  const sB = bDim;
+  const sS = sDim * bDim;
+  const sN = nDim * sDim * bDim;
+  const minUnits = Math.min(...options.map(unitsOf));
+
+  // Two working buffers alternate between creator types, so the search does not
+  // allocate a fresh table per option.
+  const bufs = [new Float64Array(total), new Float64Array(total)];
+  let which = 0;
+
+  for (let g = 0; g < groups.length; g++) {
+    const group = groups[g];
     const U0 = table; // states with no creator of this size yet
-    let U1 = new Float64Array(total).fill(NEG); // states with at least one
+    let U1 = bufs[which].fill(NEG); // states with at least one
     const steps = [];
+    // Sizes used so far can't exceed the groups processed (this one included).
+    const sMax = needS ? Math.min(sDim - 1, g + 1) : 0;
     for (const o of group) {
       const u = unitsOf(o);
       const db = needB && o.big ? 1 : 0;
-      const A = U1.slice();
+      const w = o.views;
+      which ^= 1;
+      const A = bufs[which];
+      A.set(U1);
       const cnt = new Uint16Array(total);
       const fromU0 = new Uint8Array(total);
+      const back = u * sN + dn * sS; // offset to (c - u, n - dn)
       for (let c = u; c <= U; c++) {
-        for (let n = dn; n < nDim; n++) {
-          for (let s = 0; s < sDim; s++) {
+        // With c money units you can afford at most c / (cheapest units) creators.
+        const nMax = needN ? Math.min(nDim - 1, Math.floor(c / minUnits)) : 0;
+        for (let n = dn; n <= nMax; n++) {
+          const sTop = needN ? Math.min(sMax, n) : sMax;
+          for (let s = 0; s <= sTop; s++) {
+            const base = c * sN + n * sS + s * sB;
             for (let b = db; b < bDim; b++) {
-              const i = idx(c, n, s, b);
+              const i = base + b;
+              const j = i - back - db; // (c - u, n - dn, s, b - db)
               let best = A[i];
               let k = 0;
               let start = 0;
               // first creator of this size, through this option
-              if (s - ds >= 0) {
-                const v0 = U0[idx(c - u, n - dn, s - ds, b - db)];
-                if (v0 !== NEG && v0 + o.views > best) {
-                  best = v0 + o.views;
+              if (s >= ds) {
+                const v0 = U0[j - ds * sB];
+                if (v0 !== NEG && v0 + w > best) {
+                  best = v0 + w;
                   k = 1;
                   start = 1;
                 }
               }
-              const j = idx(c - u, n - dn, s, b - db);
               // size already used through an earlier option
-              if (U1[j] !== NEG && U1[j] + o.views > best) {
-                best = U1[j] + o.views;
+              const v1 = U1[j];
+              if (v1 !== NEG && v1 + w > best) {
+                best = v1 + w;
                 k = 1;
                 start = 0;
               }
               // another creator through this option
-              if (cnt[j] > 0 && A[j] + o.views > best) {
-                best = A[j] + o.views;
+              if (cnt[j] > 0 && A[j] + w > best) {
+                best = A[j] + w;
                 k = cnt[j] + 1;
                 start = fromU0[j];
               }

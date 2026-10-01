@@ -44,7 +44,6 @@ export const DEFAULT_SETTINGS = {
   planningPercentile: 65,
   // Creator fees above this percentile need approval / re-optimising.
   approvalPercentile: 80,
-  giftingCostPerCreatorGbp: null, // "Set from Richie's campaigns" — must be entered
   giftedPostingRate: 0.5,
   // Reach is not shown: there is no historical reach data yet. Kept for later.
   reachRatio: null,
@@ -68,9 +67,11 @@ export const DEFAULT_SETTINGS = {
   optimiserStepGbp: 25,
   historicalCreatorMoneyShare: 0.31,
   defaultVideosPerCreator: 3,
-  // Which campaigns feed the rate table: Pipedrive account owners (team.id).
-  // 9 = Ritchie Boubouli. Empty list = every campaign.
+  // Which campaigns feed the rate table: Ritchie's deals (team.id 9) and her pod
+  // (team.pod_id 9): a campaign counts if one of them is account owner or SCM.
+  // Both empty = every campaign.
   rateOwnerIds: [9],
+  ratePodIds: [9],
   keptGroupPattern: 'final|approved|live|gifting|gifted',
   // Client slide defaults; each package can override them when downloading.
   slideTheme: 'light',

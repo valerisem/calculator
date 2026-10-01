@@ -16,7 +16,7 @@ export function defaultInputs(meta) {
     budget: '',
     margin: meta.settings.targetMargin,
     videosPerCreator: meta.settings.defaultVideosPerCreator,
-    gifted: 0,
+    gifting: { enabled: false, creators: '', productCost: '', shippingCost: '', postingRate: '', clientCharge: '' },
     boostingLines: [],
     paidMedia: { platform: '', spend: '', feeType: meta.settings.paidMediaFeeType, fee: meta.settings.paidMediaFee },
     usage: { rights: 'organic', paidUsage: false, exclusivity: 'none' },
@@ -80,6 +80,8 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
   const mixSeq = useRef(0);
 
   const fullInputs = useMemo(() => ({ ...inputs, package: packageFromLines(lines) }), [inputs, lines]);
+  // Only what changes the numbers triggers a recalculation (not the campaign name).
+  const calcKey = useMemo(() => { const { campaign, ...rest } = fullInputs; return JSON.stringify(rest); }, [fullInputs]);
 
   useEffect(() => {
     if (!fullInputs.markets.length) {
@@ -89,8 +91,16 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
     const mine = ++seq.current;
     const t = setTimeout(async () => {
       setLoading(true);
+      // "Your creators" is quick: show it first, then the recommended packages.
+      const hasCreators = Object.keys(fullInputs.package || {}).length > 0;
+      const quick = hasCreators && Number(fullInputs.budget) > 0
+        ? api('/calculate', { method: 'POST', body: { inputs: { ...fullInputs, budget: '' } } })
+            .then((r) => { if (mine === seq.current) setSet((prev) => ({ ...r, recommended: prev?.recommended || [], partial: true })); })
+            .catch(() => {})
+        : null;
       try {
         const r = await api('/calculate', { method: 'POST', body: { inputs: fullInputs } });
+        await quick;
         if (mine === seq.current) {
           setSet(r);
           setError(null);
@@ -100,9 +110,10 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
       } finally {
         if (mine === seq.current) setLoading(false);
       }
-    }, 400);
+    }, 300);
     return () => clearTimeout(t);
-  }, [fullInputs]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calcKey]);
 
   const mixKey = JSON.stringify([creatorCount, inputs.platforms, inputs.markets, inputs.niche, inputs.budget, inputs.currency, inputs.margin, inputs.videosPerCreator, inputs.allowedSizes]);
   useEffect(() => {

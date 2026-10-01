@@ -54,10 +54,15 @@ export async function rebuildRates(actor) {
     'creator_bookings',
     'id,campaign_number,platform,location,tiktok_followers,instagram_followers,youtube_followers,avg_views,deliverables,fee_gbp,board_group',
   );
-  const campaigns = await must(db().from('campaigns').select('pd_deal_id,wide_niche,account_owner_id').limit(10000));
-  const { archetypes, flags, factors, stats } = buildRateTable(bookings, campaigns, settings);
+  const campaigns = await must(db().from('campaigns').select('pd_deal_id,wide_niche,account_owner_id,scm_id').limit(10000));
+  const podIds = (settings.ratePodIds || []).map(Number);
+  const podMembers = podIds.length
+    ? (await must(db().from('team').select('id').in('pod_id', podIds))).map((t) => t.id)
+    : [];
+  const { archetypes, flags, factors, stats } = buildRateTable(bookings, campaigns, { ...settings, ratePodMemberIds: podMembers });
   const params = {
     rateOwnerIds: settings.rateOwnerIds,
+    ratePodIds: settings.ratePodIds,
     keptGroupPattern: settings.keptGroupPattern,
     droppedGroupPattern: settings.droppedGroupPattern,
     planningPercentile: settings.planningPercentile,

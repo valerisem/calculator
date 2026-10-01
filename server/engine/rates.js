@@ -58,7 +58,9 @@ export function resolvePlatform(b) {
  */
 export function buildRateTable(bookings, campaigns, settings) {
   const campaignByDeal = new Map(campaigns.map((c) => [String(c.pd_deal_id), c]));
-  const owners = (settings.rateOwnerIds || []).map(Number);
+  // People whose campaigns feed the rates: the listed owners plus everyone in the
+  // listed pods. A campaign counts if one of them is its account owner or SCM.
+  const owners = [...(settings.rateOwnerIds || []), ...(settings.ratePodMemberIds || [])].map(Number);
   const kept = new RegExp(settings.keptGroupPattern, 'i');
   const dropped = new RegExp(settings.droppedGroupPattern, 'i');
 
@@ -68,7 +70,7 @@ export function buildRateTable(bookings, campaigns, settings) {
 
   for (const b of bookings) {
     const campaign = campaignByDeal.get(String(b.campaign_number));
-    if (owners.length && !(campaign && owners.includes(Number(campaign.account_owner_id)))) {
+    if (owners.length && !(campaign && (owners.includes(Number(campaign.account_owner_id)) || owners.includes(Number(campaign.scm_id))))) {
       stats.notOwner++;
       continue;
     }

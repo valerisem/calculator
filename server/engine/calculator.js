@@ -100,7 +100,18 @@ export function normaliseInputs(raw, settings) {
     objective: ['Performance', 'Balanced', 'Content'].includes(raw.objective) ? raw.objective : 'Balanced',
     margin: raw.margin == null || raw.margin === '' ? settings.targetMargin : num(raw.margin),
     videosPerCreator: Math.max(1, Math.round(num(raw.videosPerCreator, settings.defaultVideosPerCreator))),
-    gifted: Math.max(0, Math.round(num(raw.gifted))),
+    // Gifting is a per-proposal add-on. Old saves had only a number of gifted creators.
+    gifting: (() => {
+      const g = raw.gifting && typeof raw.gifting === 'object' ? raw.gifting : { enabled: num(raw.gifted) > 0, creators: num(raw.gifted) };
+      return {
+        enabled: !!g.enabled,
+        creators: Math.max(0, Math.round(num(g.creators))),
+        productCost: optNum(g.productCost), // per creator, client currency
+        shippingCost: optNum(g.shippingCost), // per creator, client currency
+        postingRate: optNum(g.postingRate), // fraction; empty = settings default
+        clientCharge: optNum(g.clientCharge), // optional fixed charge to the client
+      };
+    })(),
     boostingLines,
     paidMedia,
     otherCosts: num(raw.otherCosts),
@@ -195,9 +206,19 @@ export function calculate(rawInputs, ctx) {
   };
 
   // Add-ons and media, in GBP.
-  const g = settings.giftingCostPerCreatorGbp;
-  if (inp.gifted > 0 && g == null) warnings.push('Gifting cost per gift is not set in Settings; gifting is costed at 0.');
-  const giftingGbp = inp.gifted * (g || 0);
+  // Gifting: internal cost = creators gifted × (product + shipping); paid whether or not they post.
+  const gift = inp.gifting;
+  const gifted = gift.enabled ? gift.creators : 0;
+  inp.gifted = gifted;
+  if (gifted > 0 && gift.productCost == null && gift.shippingCost == null) {
+    return fail('Enter the internal gifting cost per creator (product and shipping; 0 product cost if the brand supplies it).');
+  }
+  const giftCostPerCreator = (gift.productCost || 0) + (gift.shippingCost || 0);
+  const giftingGbp = toGbp(gifted * giftCostPerCreator);
+  const postingRate = gift.postingRate ?? settings.giftedPostingRate;
+  // With a client gifting charge, gifting is billed as its own line (no campaign margin on it).
+  const giftChargeGbp = gifted > 0 && gift.clientCharge != null ? toGbp(gift.clientCharge) : 0;
+  const giftCarriesMargin = gifted > 0 && gift.clientCharge == null;
   const otherGbp = toGbp(inp.otherCosts);
   const boosts = inp.boostingLines.map((b) => {
     const cpmUsd = b.cpmUsd ?? num(settings.boostingCpmUsd?.[b.platform], settings.boostingCostPer1000Usd);
@@ -211,10 +232,10 @@ export function calculate(rawInputs, ctx) {
   const boostFeesGbp = toGbp(boosts.reduce((s, b) => s + b.fee, 0));
   const pmSpendGbp = toGbp(inp.paidMedia.spend);
   const pmFeeGbp = inp.paidMedia.spend > 0 ? toGbp(inp.paidMedia.feeType === 'fixed' ? inp.paidMedia.fee : (inp.paidMedia.spend * inp.paidMedia.fee) / 100) : 0;
-  const marginAddOnsGbp = giftingGbp + otherGbp + boostMarginGbp; // carry the campaign margin
+  const marginAddOnsGbp = (giftCarriesMargin ? giftingGbp : 0) + otherGbp + boostMarginGbp; // carry the campaign margin
   const passGbp = pmSpendGbp + boostPassGbp; // pass-through spend
   const feesGbp = pmFeeGbp + boostFeesGbp; // management fees (revenue)
-  const giftedPosts = Math.floor(inp.gifted * settings.giftedPostingRate);
+  const giftedPosts = Math.floor(gifted * postingRate);
 
   let counts;
   let standardGbp;
@@ -224,7 +245,7 @@ export function calculate(rawInputs, ctx) {
   if (inp.mode === 'budget') {
     if (!(inp.budget > 0)) return fail('Enter the client budget.');
     standardGbp = toGbp(inp.budget);
-    creatorMoneyGbp = (standardGbp - passGbp - feesGbp) * (1 - M) - marginAddOnsGbp;
+    creatorMoneyGbp = (standardGbp - passGbp - feesGbp - giftChargeGbp) * (1 - M) - marginAddOnsGbp;
     if (creatorMoneyGbp <= 0) return fail('Budget too small for these costs.');
     let options = [];
     for (const size of inp.allowedSizes) {
@@ -271,7 +292,7 @@ export function calculate(rawInputs, ctx) {
     if (!Object.keys(counts).length) return fail('Add at least one creator to the package.');
     creatorMoneyGbp = Object.entries(counts).reduce((s, [k, n]) => s + n * combos[k].packageCostGbp, 0);
     // Quote in whole currency units, rounded up so the margin is never below target.
-    standardGbp = toGbp(Math.ceil(fromGbp((creatorMoneyGbp + marginAddOnsGbp) / (1 - M) + passGbp + feesGbp)));
+    standardGbp = toGbp(Math.ceil(fromGbp((creatorMoneyGbp + marginAddOnsGbp) / (1 - M) + passGbp + feesGbp + giftChargeGbp)));
   }
 
   const order = (k) => SIZE_BANDS.findIndex((b) => b.key === combos[k].size);
@@ -281,7 +302,8 @@ export function calculate(rawInputs, ctx) {
   const allocatedGbp = lines.reduce((s, l) => s + l.count * l.packageCostGbp, 0);
   const totalCreators = lines.reduce((s, l) => s + l.count, 0);
   const totalVideos = totalCreators * v + giftedPosts;
-  const deliveryGbp = allocatedGbp + marginAddOnsGbp + passGbp;
+  const chargedGiftGbp = giftCarriesMargin ? 0 : giftingGbp; // billed separately, still a delivery cost
+  const deliveryGbp = allocatedGbp + marginAddOnsGbp + chargedGiftGbp + passGbp;
 
   // Commercial adjustment (proposal only): standard quote -> final quote.
   const standard = fromGbp(standardGbp);
@@ -292,7 +314,7 @@ export function calculate(rawInputs, ctx) {
   // Service gross margin: excludes pass-through spend (paid media, pass-through
   // boosting) from both revenue and cost. This is the margin we warn on.
   // Blended contribution margin includes them and is shown as a secondary metric.
-  const serviceCostGbp = allocatedGbp + marginAddOnsGbp;
+  const serviceCostGbp = allocatedGbp + marginAddOnsGbp + chargedGiftGbp;
   const serviceMargin = (q) => (q - passGbp > 0 ? (q - passGbp - serviceCostGbp) / (q - passGbp) : null);
   const standardMargin = serviceMargin(standardGbp);
   const effectiveMargin = serviceMargin(finalGbp);
@@ -306,16 +328,16 @@ export function calculate(rawInputs, ctx) {
   );
   const minCreatorsNeeded = Math.max(1, inp.minCreators || 0, inp.requiredVideos ? Math.ceil(Math.max(0, inp.requiredVideos - giftedPosts) / v) : 0);
   const minimumViableGbp = Number.isFinite(cheapest)
-    ? (minCreatorsNeeded * cheapest + marginAddOnsGbp) / (1 - M) + passGbp + feesGbp
+    ? (minCreatorsNeeded * cheapest + marginAddOnsGbp) / (1 - M) + passGbp + feesGbp + giftChargeGbp
     : null;
   const adjusted = Math.abs(finalPrice - standard) >= 1;
 
   // Section 4, step 4: simulation, overall and per tier.
-  const nano = inp.gifted > 0 ? rateFor(inp.platforms[0], inp.markets[0], NANO_KEY) : null;
-  if (inp.gifted > 0 && !nano) warnings.push('No nano-size rate data, so gifted posts add no views.');
+  const nano = gifted > 0 ? rateFor(inp.platforms[0], inp.markets[0], NANO_KEY) : null;
+  if (gifted > 0 && !nano) warnings.push('No nano-size rate data, so gifted posts add no views.');
   const groupOf = (l) => ({ count: l.count, videos: v, p25: l.viewsP25, p50: l.viewsP50, p75: l.viewsP75 });
-  const giftedGroup = nano ? { count: inp.gifted, postingRate: settings.giftedPostingRate, p25: nano.viewsP25, p50: nano.viewsP50, p75: nano.viewsP75 } : null;
-  const seed = hashString(JSON.stringify([counts, v, inp.gifted, inp.niche]));
+  const giftedGroup = nano ? { count: gifted, postingRate, p25: nano.viewsP25, p50: nano.viewsP50, p75: nano.viewsP75 } : null;
+  const seed = hashString(JSON.stringify([counts, v, gifted, postingRate, inp.niche]));
   const runs = settings.simulationRuns;
   const sim = simulateViews(lines.map(groupOf), giftedGroup, { runs, seed });
   const pctl = settings.promisePercentile;
@@ -335,8 +357,8 @@ export function calculate(rawInputs, ctx) {
     const creators = tl.reduce((s, l) => s + l.count, 0);
     return tierSummary(tier, creators, creators * v, simulateViews(tl.map(groupOf), null, { runs, seed: seed + i + 1 }));
   });
-  if (giftedGroup && inp.gifted > 0) {
-    tiers.push(tierSummary('Gifted', inp.gifted, giftedPosts, simulateViews([], giftedGroup, { runs, seed: seed + 99 })));
+  if (giftedGroup && gifted > 0) {
+    tiers.push(tierSummary('Gifted', gifted, giftedPosts, simulateViews([], giftedGroup, { runs, seed: seed + 99 })));
   }
 
   const boostedViews = boosts.reduce((s, b) => s + b.views, 0);
@@ -385,7 +407,7 @@ export function calculate(rawInputs, ctx) {
       creators: lines.map((l) => ({ key: l.key, size: l.size, label: l.label, tier: l.tier, platform: l.platform, market: l.market, count: l.count, videosEach: v, videos: l.count * v })),
       totalCreators,
       totalVideos,
-      giftedCreators: inp.gifted,
+      giftedCreators: gifted,
       giftedPosts,
       viewsPromised,
       tierGuarantees: tiers.map(({ tier, creators, videos, guaranteedViews }) => ({ tier, creators, videos, guaranteedViews })),
@@ -417,6 +439,7 @@ export function calculate(rawInputs, ctx) {
       creatorMoneyAllocated: round2(fromGbp(allocatedGbp)),
       buffer: round2(fromGbp(Math.max(0, creatorMoneyGbp - allocatedGbp))),
       usageUplift: round4(uplift),
+      gifting: gifted > 0 ? { creators: gifted, postingRate, posts: giftedPosts, costPerCreator: round2(giftCostPerCreator), cost: round2(fromGbp(giftingGbp)), clientCharge: gift.clientCharge } : null,
       boosting: boosts,
       costs: {
         creators: round2(fromGbp(allocatedGbp)),

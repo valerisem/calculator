@@ -1,6 +1,7 @@
 import React from 'react';
 
 const USAGE_LABELS = { organic: 'Organic only', '30d': '30 days', '3m': '3 months', '6m': '6 months', '12m': '12 months', perpetual: 'Perpetual' };
+const fmtCur = (n, cur) => new Intl.NumberFormat('en-GB', { style: 'currency', currency: cur || 'GBP', maximumFractionDigits: 0 }).format(n || 0);
 const EXCLUSIVITY_LABELS = { none: 'None', category: 'Category', competitor: 'Competitor restriction' };
 
 // Add-ons & media: boosting (per platform), paid media, gifting, usage rights, other direct costs.
@@ -16,6 +17,13 @@ export default function AddOns({ meta, inputs, setInputs }) {
     setInputs({ ...inputs, boostingLines: [...boosts, { platform: inputs.platforms?.[0] || 'TikTok', by: 'budget', budget: '', targetViews: '', cpmUsd: '', treatment: 'margin', feeType: 'percent', fee: '' }] });
   const setPm = (patch) => setInputs({ ...inputs, paidMedia: { feeType: settings.paidMediaFeeType, fee: settings.paidMediaFee, ...pm, ...patch } });
   const setUsage = (patch) => setInputs({ ...inputs, usage: { ...usage, ...patch } });
+  const gift = inputs.gifting || { enabled: false };
+  const setGift = (patch) => setInputs({ ...inputs, gifting: { ...gift, ...patch } });
+  const giftN = Math.max(0, Math.round(Number(gift.creators) || 0));
+  const giftRate = gift.postingRate === '' || gift.postingRate == null ? settings.giftedPostingRate : Number(gift.postingRate);
+  const giftPosts = Math.floor(giftN * giftRate);
+  const giftCost = giftN * ((Number(gift.productCost) || 0) + (Number(gift.shippingCost) || 0));
+  const giftCostMissing = giftN > 0 && (gift.productCost === '' || gift.productCost == null) && (gift.shippingCost === '' || gift.shippingCost == null);
   const set1 = (k) => (e) => setInputs({ ...inputs, [k]: e.target.value });
 
   return (
@@ -80,12 +88,30 @@ export default function AddOns({ meta, inputs, setInputs }) {
       </div>
 
       <div className="addon">
-        <div className="addon-head"><h3>Gifting</h3></div>
-        <div className="row3">
-          <label className="field"><span>Creators gifted</span><input className="line" type="number" min="0" value={inputs.gifted} onChange={set1('gifted')} /></label>
-          <div className="field"><span>Cost per gift</span><div className="line static">{settings.giftingCostPerCreatorGbp == null ? 'Not set' : `£${settings.giftingCostPerCreatorGbp}`}</div></div>
-          <div className="field"><span>Expected to post</span><div className="line static">{Math.round(settings.giftedPostingRate * 100)}%</div></div>
+        <div className="addon-head">
+          <h3>Gifting</h3>
+          <div className="toggle-group small">
+            <button className={!gift.enabled ? 'on' : ''} onClick={() => setGift({ enabled: false })}>Off</button>
+            <button className={gift.enabled ? 'on' : ''} onClick={() => setGift({ enabled: true })}>On</button>
+          </div>
         </div>
+        {gift.enabled && (
+          <>
+            <div className="row3">
+              <label className="field"><span>Creators to gift</span><input className="line" type="number" min="0" value={gift.creators ?? ''} onChange={(e) => setGift({ creators: e.target.value })} /></label>
+              <label className="field"><span>Product cost per creator, {cur}</span><input className={`line ${giftCostMissing ? 'missing' : ''}`} type="number" min="0" step="any" value={gift.productCost ?? ''} onChange={(e) => setGift({ productCost: e.target.value })} /></label>
+              <label className="field"><span>Shipping / fulfilment per creator, {cur}</span><input className={`line ${giftCostMissing ? 'missing' : ''}`} type="number" min="0" step="any" value={gift.shippingCost ?? ''} onChange={(e) => setGift({ shippingCost: e.target.value })} /></label>
+            </div>
+            <div className="row3">
+              <label className="field"><span>Expected posting rate (%)</span><input className="line" type="number" min="0" max="100" step="any" placeholder={String(Math.round(settings.giftedPostingRate * 100))} value={gift.postingRate === '' || gift.postingRate == null ? '' : Math.round(gift.postingRate * 1000) / 10} onChange={(e) => setGift({ postingRate: e.target.value === '' ? '' : Number(e.target.value) / 100 })} /></label>
+              <div className="field"><span>Expected gifted posts</span><div className="line static">{giftPosts}</div></div>
+              <div className="field"><span>Internal gifting cost</span><div className="line static">{fmtCur(giftCost, cur)}</div></div>
+            </div>
+            <div className="row3">
+              <label className="field"><span>Client gifting charge, {cur} (optional)</span><input className="line" type="number" min="0" step="any" value={gift.clientCharge ?? ''} onChange={(e) => setGift({ clientCharge: e.target.value })} /></label>
+            </div>
+          </>
+        )}
       </div>
 
       <div className="addon">

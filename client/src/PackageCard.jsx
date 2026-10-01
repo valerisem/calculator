@@ -142,7 +142,8 @@ export function PackageDetails({ result }) {
       <h4>Costs</h4>
       <dl className="cost-list">
         <dt>Creators{i.usageUplift ? ` (incl. +${fmtPct(i.usageUplift, 0)} usage/exclusivity)` : ''}</dt><dd>{fmtMoney(i.costs.creators, cur)}</dd>
-        <dt>Gifting</dt><dd>{fmtMoney(i.costs.gifting, cur)}</dd>
+        <dt>Gifting{i.gifting ? ` (${fmtInt(i.gifting.creators)} creators, ~${fmtInt(i.gifting.posts)} posts)` : ''}</dt><dd>{fmtMoney(i.costs.gifting, cur)}</dd>
+        {i.gifting?.clientCharge != null && (<><dt>Client gifting charge (revenue)</dt><dd>{fmtMoney(i.gifting.clientCharge, cur)}</dd></>)}
         <dt>Brand-lift study / other</dt><dd>{fmtMoney(i.costs.other, cur)}</dd>
         <dt>Boosting with campaign margin</dt><dd>{fmtMoney(i.costs.boostingWithMargin, cur)}</dd>
         <dt>Boosting pass-through</dt><dd>{fmtMoney(i.costs.boostingPassThrough, cur)}</dd>
