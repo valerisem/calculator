@@ -111,7 +111,7 @@ function usageLine(usage) {
  * @param {object} p
  * @param {object} p.proposal   pc_proposals row
  * @param {object} p.pkg        pc_packages row
- * @param {object} p.options    { theme, output, badge, oneLine, proposalLine, estimatedSales, salesNote, contactName, contactTitle, contactEmail, contactPhone }
+ * @param {object} p.options    { theme, output, badge, estimatedSales, salesNote }
  */
 export async function buildDeck({ proposal, pkg, options = {} }) {
   const theme = options.theme === 'dark' ? 'dark' : 'light';
@@ -155,16 +155,6 @@ export async function buildDeck({ proposal, pkg, options = {} }) {
     if (n === 28) x = fillInvestment(x, { fill, cur, influencerPart, paidPart, price, gifted: c.giftedCreators > 0 });
     if (n === 30) {
       x = fillPricing(x, { c, i, inp, cur, price, cpv, ecpm, options });
-    }
-    if (n === 33) {
-      // Contact details: filled when given; in a client-ready deck, empty ones are blanked.
-      const contact = [
-        ['[Name]', options.contactName],
-        ['[Job title]', options.contactTitle],
-        ['[name]@houseofmarketers.com', options.contactEmail],
-        ['[+44 (0) 0000 000000]', options.contactPhone],
-      ];
-      for (const [ph, v] of contact) if (v || fill) x = setText(x, ph, v || '');
     }
     // Page numbers follow the slides that are kept. The footer number is the
     // last run equal to the slide's number (step numbers like "02" come earlier).
