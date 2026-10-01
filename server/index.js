@@ -72,11 +72,14 @@ api.put('/settings', wrap(async (req, res) => res.json(await saveSettings(req.bo
 api.get('/pipedrive/deals', wrap(async (req, res) => res.json(await pipedrive.listDeals(req.query.term))));
 // Deal + values to prefill the calculator (nothing is saved).
 api.get('/pipedrive/deals/:id', wrap(async (req, res) => res.json(await pipedrive.getDeal(Number(req.params.id)))));
+// Options for required deal fields (Source channel).
+api.get('/pipedrive/deal-options', wrap(async (_req, res) => res.json(await pipedrive.dealFieldOptions())));
 api.get('/pipedrive/orgs', wrap(async (req, res) => res.json(await pipedrive.searchOrganizations(req.query.term))));
 api.post('/pipedrive/deals', wrap(async (req, res) => {
-  const { title, orgId, orgName, currency, value } = req.body || {};
+  const { title, orgId, orgName, currency, value, channel } = req.body || {};
   if (!title || !(orgId || orgName)) return res.status(400).json({ error: 'Deal title and client are required.' });
-  const deal = await pipedrive.createDeal({ title, orgId, orgName, currency, value });
+  if (!channel) return res.status(400).json({ error: 'Source channel is required in Pipedrive.' });
+  const deal = await pipedrive.createDeal({ title, orgId, orgName, currency, value, channel });
   await logEvent({ action: 'pipedrive_deal_created', actor: req.user.label, payload: deal });
   res.json(deal);
 }));
@@ -301,7 +304,11 @@ async function touchProposal(id) {
 
 // ---- slide -----------------------------------------------------------------
 
+// Saves the slide options for the package and returns a short-lived download link.
 api.post('/packages/:id/slide-link', wrap(async (req, res) => {
+  if (req.body?.options) {
+    await must(db().from('pc_packages').update({ slide_options: req.body.options }).eq('id', req.params.id));
+  }
   const token = signDownload(req.params.id, req.user.label);
   res.json({ url: `${config.publicUrl}/download/packages/${req.params.id}/slide?t=${token}` });
 }));
@@ -311,8 +318,20 @@ api.get('/packages/:id/slide', wrap(async (req, res) => sendSlide(req.params.id,
 async function sendSlide(packageId, actor, res) {
   const pkg = await must(db().from('pc_packages').select('*').eq('id', packageId).single());
   const proposal = await must(db().from('pc_proposals').select('*').eq('id', pkg.proposal_id).single());
-  const { buffer, fileName } = await buildSlide({ proposal, pkg });
-  await must(db().from('pc_slides').insert({ package_id: pkg.id, file_name: fileName, created_by: actor }));
+  const settings = await getSettings();
+  const options = {
+    theme: settings.slideTheme,
+    part: settings.slidePart,
+    subtitle: settings.slideSubtitle,
+    badge: settings.slideBadge,
+    extraLines: settings.slideExtraLines,
+    salesNote: settings.slideSalesNote,
+    oneLine: '',
+    estimatedSales: '',
+    ...(pkg.slide_options || {}),
+  };
+  const { buffer, fileName } = await buildSlide({ proposal, pkg, options });
+  await must(db().from('pc_slides').insert({ package_id: pkg.id, file_name: fileName, created_by: actor, options }));
   await logEvent({ proposalId: proposal.id, packageId: pkg.id, action: 'slide_generated', actor });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
   res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
@@ -344,5 +363,9 @@ app.listen(config.port, async () => {
     } catch (e) {
       console.error('Rate table check failed:', e.message);
     }
+    // Rebuild the rate table from creator_bookings once a day.
+    setInterval(() => {
+      rebuildRates('daily').then((r) => console.log('Daily rate rebuild', r.stats)).catch((e) => console.error('Daily rate rebuild failed:', e.message));
+    }, 24 * 3600 * 1000);
   }
 });

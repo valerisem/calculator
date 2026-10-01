@@ -58,7 +58,13 @@ function NewDeal({ defaultTitle, currency, busy, onCreated, onError }) {
   const [orgs, setOrgs] = useState([]);
   const [org, setOrg] = useState(null);
   const [title, setTitle] = useState(defaultTitle || '');
+  const [channel, setChannel] = useState('');
+  const [channels, setChannels] = useState([]);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api('/pipedrive/deal-options').then((o) => setChannels(o.channel || [])).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (org || orgTerm.trim().length < 2) return setOrgs([]);
@@ -71,7 +77,7 @@ function NewDeal({ defaultTitle, currency, busy, onCreated, onError }) {
     try {
       const deal = await api('/pipedrive/deals', {
         method: 'POST',
-        body: { title, orgId: org?.id, orgName: org ? undefined : orgTerm.trim(), currency },
+        body: { title, orgId: org?.id, orgName: org ? undefined : orgTerm.trim(), currency, channel: Number(channel) },
       });
       onCreated(deal);
     } catch (e) {
@@ -104,7 +110,14 @@ function NewDeal({ defaultTitle, currency, busy, onCreated, onError }) {
         <span>Deal title</span>
         <input className="line" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Acme – Q4 TikTok launch" />
       </label>
-      <button className="cta" disabled={busy || saving || !title.trim() || !(org || orgTerm.trim())} onClick={create}>
+      <label className="field">
+        <span>Source channel</span>
+        <select className="line" value={channel} onChange={(e) => setChannel(e.target.value)}>
+          <option value="">Choose…</option>
+          {channels.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+        </select>
+      </label>
+      <button className="cta" disabled={busy || saving || !title.trim() || !(org || orgTerm.trim()) || !channel} onClick={create}>
         {saving ? 'Creating…' : 'Create deal and proposal'} <span>›</span>
       </button>
     </>

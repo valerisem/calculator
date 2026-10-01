@@ -55,6 +55,7 @@ export default function App() {
         <Proposal
           key={view.key}
           proposalId={view.id}
+          settings={meta.settings}
           onBack={() => go({ name: 'proposals' })}
           onEdit={(pkg) => go({ name: 'calculator', inputs: pkg.inputs, editing: { packageId: pkg.id, proposalId: pkg.proposal_id, kind: pkg.mode } })}
         />

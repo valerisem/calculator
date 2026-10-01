@@ -177,3 +177,13 @@ button.primary { border: none; background: var(--pink); color: var(--white); bor
   .rule, .pkg-foot, .warnings, .error-text { margin-left: 0; }
   .add { min-width: 0; width: 100%; }
 }
+
+.slide-box { display: flex; flex-direction: column; gap: 18px; }
+textarea.line { resize: vertical; font: inherit; font-size: 15px; }
+.howto { line-height: 1.6; }
+.howto h3 { margin: 22px 0 6px; font-size: 16px; }
+.formula { font-family: Outfit, Inter, sans-serif; font-weight: 600; color: var(--ink); background: var(--panel); border-radius: 10px; padding: 10px 14px; margin: 6px 0; }
+.howto dl { display: grid; grid-template-columns: 220px 1fr; gap: 6px 16px; margin: 8px 0 0; }
+.howto dt { font-weight: 600; color: var(--ink); }
+.howto dd { margin: 0; color: var(--text); }
+.card label textarea { font: inherit; font-size: 15px; color: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: transparent; resize: vertical; }

@@ -62,5 +62,12 @@ export const DEFAULT_SETTINGS = {
   // 9 = Ritchie Boubouli. Empty list = every campaign.
   rateOwnerIds: [9],
   keptGroupPattern: 'final|approved|live|gifting|gifted',
+  // Client slide defaults; each package can override them when downloading.
+  slideTheme: 'light',
+  slidePart: '2',
+  slideSubtitle: 'Built to hit your campaign goal',
+  slideBadge: 'Most popular',
+  slideExtraLines: [],
+  slideSalesNote: 'Excludes repeat purchases',
   droppedGroupPattern: 'pass|maybe|creators? list|dropped out|not available',
 };

@@ -67,7 +67,17 @@ export async function searchOrganizations(term) {
   return (r.data?.items || []).map((i) => ({ id: i.item.id, name: i.item.name }));
 }
 
-export async function createDeal({ title, orgId, orgName, currency, value }) {
+// Pipedrive marks Source channel as mandatory for deals; the form asks for it.
+export async function dealFieldOptions() {
+  if (!dealFieldsCache) {
+    const r = await pd('/dealFields', { query: { limit: 500 } });
+    dealFieldsCache = r.data || [];
+  }
+  const channel = dealFieldsCache.find((f) => f.key === 'channel');
+  return { channel: (channel?.options || []).map((o) => ({ id: o.id, label: o.label })) };
+}
+
+export async function createDeal({ title, orgId, orgName, currency, value, channel }) {
   let org = orgId;
   if (!org && orgName) {
     const created = await pd('/organizations', { method: 'POST', body: { name: orgName } });
@@ -75,7 +85,7 @@ export async function createDeal({ title, orgId, orgName, currency, value }) {
   }
   const r = await pd('/deals', {
     method: 'POST',
-    body: { title, org_id: org || undefined, currency: currency || 'GBP', value: value || undefined, stage_id: config.pipedriveStageId },
+    body: { title, org_id: org || undefined, currency: currency || 'GBP', value: value || undefined, stage_id: config.pipedriveStageId, channel: channel || undefined },
   });
   return dealSummary(r.data);
 }

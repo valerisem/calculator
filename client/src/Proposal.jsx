@@ -2,9 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { api, notify, openUrl } from './api.js';
 import { fmtDate } from './format.js';
 import PackageCard, { PackageDetails } from './PackageCard.jsx';
+import SlideBox from './SlideBox.jsx';
 
 // A deal's saved packages: choose one, approve it (syncs Pipedrive), download its slide.
-export default function Proposal({ proposalId, onBack, onEdit }) {
+export default function Proposal({ proposalId, settings, onBack, onEdit }) {
   const [data, setData] = useState(null);
   const [selected, setSelected] = useState(null);
   const [view, setView] = useState('client');
@@ -60,10 +61,6 @@ export default function Proposal({ proposalId, onBack, onEdit }) {
     await load();
   }, 'Package deleted');
 
-  const slide = () => run(async () => {
-    const { url } = await api(`/packages/${pkg.id}/slide-link`, { method: 'POST' });
-    openUrl(url);
-  });
 
   const saveAgreed = () => run(async () => {
     await api(`/packages/${pkg.id}`, { method: 'PUT', body: { inputs: { ...pkg.inputs, agreedPrice: agreed === '' ? null : Number(agreed) } } });
@@ -99,14 +96,11 @@ export default function Proposal({ proposalId, onBack, onEdit }) {
               {pkg.is_approved
                 ? <button className="ghost" disabled={busy} onClick={withdraw}>Withdraw approval</button>
                 : <button className="cta" disabled={busy} onClick={approve}>Approve package <span>›</span></button>}
-              <button className="ghost" disabled={busy} onClick={slide}>Download client slide</button>
               <button className="ghost" disabled={busy} onClick={() => onEdit(pkg)}>Adjust in calculator</button>
               <button className="ghost danger" disabled={busy} onClick={remove}>Delete</button>
             </div>
-            <p className="muted small">
-              Approving sets the deal value, projected margin, number of influencers, paid media and brand uplift in Pipedrive and adds a note.
-              Adjusting an approved package re-sends it.
-            </p>
+            <div className="dash" />
+            <SlideBox pkg={pkg} settings={settings} busy={busy} onError={setError} />
           </>
         ) : (
           <p className="muted">No packages saved yet.</p>
