@@ -44,7 +44,7 @@ export default function Settings({ meta, onChanged }) {
 
   const field = ([key, label, type]) => (
     <label key={key}>
-      {label}
+      {label}{type === 'percent' ? ' (%)' : ''}
       <input
         type={type === 'text' ? 'text' : 'number'}
         step="any"
@@ -55,19 +55,20 @@ export default function Settings({ meta, onChanged }) {
           setValues({ ...values, [key]: val });
         }}
       />
-      {type === 'percent' && <span className="muted small">%</span>}
     </label>
   );
 
   return (
-    <div className="page">
+    <div className="page full">
       <h1 className="title">Settings</h1>
       {error && <div className="error-box">{error}</div>}
 
       <section className="card howto">
         <h2>How the price is worked out</h2>
 
-        <h3>1. What one creator costs us</h3>
+        <div className="howto-grid">
+        <div className="howto-block">
+          <h3>1. What one creator costs us</h3>
         <div className="formula">Creator cost = videos per creator × planning cost per video × multi-video factor</div>
         <dl>
           <dt>Planning cost per video</dt>
@@ -75,20 +76,23 @@ export default function Settings({ meta, onChanged }) {
           <dt>Multi-video factor</dt>
           <dd>The discount creators give when they make several videos, taken from past bookings. It stays at 1 until we have at least 10 bookings to measure it.</dd>
         </dl>
-
-        <h3>2. Price to quote (Your creators)</h3>
+        </div>
+        <div className="howto-block">
+          <h3>2. Price to quote (Your creators)</h3>
         <div className="formula">Price = (all creator costs + boosting + paid media + gifting + brand lift / other) ÷ (1 − margin)</div>
         <p>With a {pct(v.targetMargin)} margin, a package that costs us £10,000 to deliver is quoted at £{Math.round(10000 / (1 - v.targetMargin)).toLocaleString('en-GB')}.</p>
-
-        <h3>3. Package from a budget (Most views, Balanced, Most videos)</h3>
+        </div>
+        <div className="howto-block">
+          <h3>3. Package from a budget (Most views, Balanced, Most videos)</h3>
         <div className="formula">Creator money = budget × (1 − margin) − boosting − paid media − gifting − brand lift / other</div>
         <p>
           We then choose how many creators of each size fit inside the creator money. <b>Most views</b> gets the most views.
           <b> Balanced</b> gets the most views but rewards a mix: +{pct(v.balancedSizeBonus)} for each extra size and +{pct(v.balancedCreatorBonus)} for each extra creator.
           <b> Most videos</b> gets the most videos first, then the most views. Money left over buys one more of the cheapest creator; anything still left is the negotiation buffer.
         </p>
-
-        <h3>4. Results we show the client</h3>
+        </div>
+        <div className="howto-block">
+          <h3>4. Results we show the client</h3>
         <dl>
           <dt>Views (guaranteed)</dt>
           <dd>We run the campaign 5,000 times using past views for each creator type. The guarantee is the number beaten in 9 of 10 runs, rounded down to the nearest 10,000.</dd>
@@ -103,21 +107,30 @@ export default function Settings({ meta, onChanged }) {
           <dt>Gifted creators</dt>
           <dd>Cost {v.giftingCostPerCreatorGbp == null ? 'not set yet (counted as £0)' : `£${v.giftingCostPerCreatorGbp} each`}; we assume {pct(v.giftedPostingRate)} of them post one video.</dd>
         </dl>
-
-        <h3>5. What stays internal</h3>
+        </div>
+        <div className="howto-block">
+          <h3>5. What stays internal</h3>
         <dl>
           <dt>Margin</dt>
           <dd>(price − everything it costs us to deliver) ÷ price. Flagged below {pct(v.marginWarning)}.</dd>
           <dt>Creator brief</dt>
           <dd>First offer = {pct(v.firstOfferShare)} of the typical (median) fee per video; maximum = the planning cost per video.</dd>
         </dl>
+        </div>
+        </div>
       </section>
 
+      <div className="settings-grid">
       <section className="card">
         <h2>Calculator settings</h2>
         <div className="grid-3">{FIELDS.map(field)}</div>
-        <h2 style={{ marginTop: 28 }}>Slide defaults</h2>
-        <div className="grid-3">{SLIDE_FIELDS.map(field)}</div>
+        <div className="row end">
+          <button className="primary" disabled={busy} onClick={() => save()}>Save settings</button>
+        </div>
+      </section>
+      <section className="card">
+        <h2>Slide defaults</h2>
+        <div className="grid-2">{SLIDE_FIELDS.map(field)}</div>
         <label style={{ marginTop: 18 }}>
           Extra lines on every slide (one per line, e.g. usage rights, free extras)
           <textarea
@@ -130,6 +143,7 @@ export default function Settings({ meta, onChanged }) {
           <button className="primary" disabled={busy} onClick={() => save()}>Save settings</button>
         </div>
       </section>
+      </div>
     </div>
   );
 }
