@@ -380,22 +380,6 @@ api.post('/packages/:id/approve', wrap(async (req, res) => {
   res.json({ package: approved, pipedrive: sync });
 }));
 
-// Delivery check by the campaign team: not_reviewed | cm_reviewed | confirmed.
-api.put('/packages/:id/review', wrap(async (req, res) => {
-  const status = ['not_reviewed', 'cm_reviewed', 'confirmed'].includes(req.body?.status) ? req.body.status : null;
-  if (!status) return res.status(400).json({ error: 'Unknown delivery status.' });
-  const reviewedBy = String(req.body?.reviewedBy || '').trim() || null;
-  const pkg = await must(
-    db().from('pc_packages').update({
-      delivery_status: status,
-      reviewed_by: status === 'not_reviewed' ? null : reviewedBy,
-      reviewed_at: status === 'not_reviewed' ? null : new Date().toISOString(),
-    }).eq('id', req.params.id).select().single(),
-  );
-  await logEvent({ proposalId: pkg.proposal_id, packageId: pkg.id, action: 'delivery_review', actor: req.user.label, payload: { status, reviewedBy } });
-  res.json(pkg);
-}));
-
 api.post('/packages/:id/unapprove', wrap(async (req, res) => {
   const pkg = await must(db().from('pc_packages').update({ is_approved: false, approved_at: null, approved_by: null }).eq('id', req.params.id).select().single());
   await must(db().from('pc_proposals').update({ status: 'draft', approved_package_id: null }).eq('id', pkg.proposal_id));
