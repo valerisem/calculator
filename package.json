@@ -1,0 +1,28 @@
+{
+  "name": "creator-package-calculator",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Monday board view: creator package pricing calculator for the sales team (Pipedrive + Supabase).",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "concurrently -k \"node --watch server/index.js\" \"vite\"",
+    "build": "vite build",
+    "start": "node server/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "express": "^4.21.0",
+    "jsonwebtoken": "^9.0.2",
+    "monday-sdk-js": "^0.5.5",
+    "pptxgenjs": "^3.12.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.4.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}
