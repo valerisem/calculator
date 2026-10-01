@@ -17,6 +17,9 @@ export function requireMonday(req, res, next) {
       if (config.mondayAccountId && Number(dat.account_id) !== config.mondayAccountId) {
         return res.status(403).json({ error: 'This monday account is not allowed.' });
       }
+      if (config.allowedUserIds.length && !config.allowedUserIds.includes(Number(dat.user_id))) {
+        return res.status(403).json({ error: 'Not available yet.', code: 'restricted' });
+      }
       req.user = { accountId: Number(dat.account_id), userId: Number(dat.user_id), label: `monday:${dat.user_id}` };
       return next();
     } catch {

@@ -27,6 +27,7 @@ export async function api(path, { method = 'GET', body } = {}) {
   if (!res.ok) {
     const err = new Error(json.error || `Request failed (${res.status})`);
     err.result = json;
+    err.status = res.status;
     throw err;
   }
   return json;

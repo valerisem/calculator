@@ -181,3 +181,6 @@ label input, label select { font-size: 14px; color: var(--text); }
   .deal-layout, .grid-2, .grid-3, .grid-4, .kpis { grid-template-columns: 1fr; }
   .span-2 { grid-column: auto; }
 }
+
+.lost { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; }
+.lost-emoji { font-size: 48px; margin-bottom: 8px; }

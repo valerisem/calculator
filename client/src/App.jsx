@@ -10,7 +10,7 @@ export default function App() {
   const [view, setView] = useState({ name: 'home' });
   const [context, setContext] = useState(null);
 
-  const loadMeta = () => api('/meta').then(setMeta).catch((e) => setError(e.message));
+  const loadMeta = () => api('/meta').then(setMeta).catch((e) => setError(e.result?.code === 'restricted' || e.status === 401 ? 'restricted' : e.message));
 
   useEffect(() => {
     loadMeta();
@@ -22,6 +22,15 @@ export default function App() {
     }
   }, []);
 
+  if (error === 'restricted') {
+    return (
+      <div className="lost">
+        <div className="lost-emoji">🧭</div>
+        <h1>It looks like you're lost</h1>
+        <p className="muted">There's nothing here for you yet. Head back to your boards.</p>
+      </div>
+    );
+  }
   if (error) {
     return (
       <div className="page">

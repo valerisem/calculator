@@ -12,6 +12,8 @@ export const config = {
   // secret is accepted too so either can be configured.
   mondaySecrets: [env.MONDAY_CLIENT_SECRET, env.MONDAY_SIGNING_SECRET].filter(Boolean),
   mondayAccountId: env.MONDAY_ACCOUNT_ID ? Number(env.MONDAY_ACCOUNT_ID) : null,
+  // Comma-separated monday user ids allowed in. Empty = everyone in the account.
+  allowedUserIds: (env.ALLOWED_MONDAY_USER_IDS || '').split(',').map((s) => Number(s.trim())).filter(Boolean),
   devAuthBypass: env.DEV_AUTH_BYPASS === '1',
   downloadSecret: env.DOWNLOAD_SECRET || env.MONDAY_CLIENT_SECRET || env.MONDAY_SIGNING_SECRET || 'dev',
   // Pipedrive custom field keys written when a package is approved.
