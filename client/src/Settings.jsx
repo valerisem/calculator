@@ -1,148 +1,128 @@
 import React, { useState } from 'react';
 import { api, notify } from './api.js';
 
-const pct = (x) => `${Math.round(Number(x) * 100)}%`;
+const pct = (x) => `${Math.round(Number(x) * 1000) / 10}%`;
 
-const FIELDS = [
-  ['targetMargin', 'Default target margin', 'percent'],
-  ['giftingCostPerCreatorGbp', 'Gifting cost per gifted creator (GBP)', 'number'],
-  ['giftedPostingRate', 'Share of gifted creators who post', 'percent'],
-  ['reachRatio', 'Reach as a share of views', 'percent'],
-  ['boostingCostPer1000Usd', 'Boosting cost per 1,000 views (USD)', 'number'],
-  ['firstOfferShare', 'First offer to creators (share of typical fee)', 'percent'],
-  ['minimumBudgetGbp', 'Warn when the budget is below (GBP)', 'number'],
-  ['marginWarning', 'Warn when the margin is below', 'percent'],
-  ['defaultVideosPerCreator', 'Default videos per creator', 'number'],
+// Settings a person can change for their own calculation.
+export const PERSONAL_FIELDS = [
+  ['giftingCostPerCreatorGbp', 'Gifting cost per creator (£)', 'number'],
+  ['giftedPostingRate', 'Gifted creators who post (%)', 'percent'],
+  ['reachRatio', 'Reach as share of views (%)', 'percent'],
+  ['boostingCostPer1000Usd', 'Boosting cost per 1,000 views ($)', 'number'],
+  ['firstOfferShare', 'First offer, share of typical fee (%)', 'percent'],
+  ['marginWarning', 'Warn when margin is below (%)', 'percent'],
+  ['minimumBudgetGbp', 'Warn when budget is below (£)', 'number'],
 ];
 
-const SLIDE_FIELDS = [
-  ['slidePart', 'Part number', 'text'],
-  ['slideSubtitle', 'Subtitle', 'text'],
-  ['slideBadge', 'Badge', 'text'],
-  ['slideSalesNote', 'Estimated sales note', 'text'],
-];
-
-export default function Settings({ meta, onChanged }) {
-  const [values, setValues] = useState(meta.settings);
+/**
+ * Collapsible settings strip at the top of the calculator. Changes apply to
+ * this calculation straight away; "Save as default" stores them for everyone.
+ */
+export function SettingsPanel({ defaults, values, onChange, onDefaultsSaved }) {
+  const [open, setOpen] = useState(false);
+  const [how, setHow] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-  const v = meta.settings;
+  const v = { ...defaults, ...values };
+  const changed = Object.keys(values).filter((k) => values[k] !== undefined && values[k] !== defaults[k]);
 
-  const save = async () => {
+  const show = (key, type) => (v[key] == null ? '' : type === 'percent' ? Math.round(v[key] * 1000) / 10 : v[key]);
+  const set = (key, type) => (e) => {
+    const raw = e.target.value;
+    onChange({ ...values, [key]: raw === '' ? null : type === 'percent' ? Number(raw) / 100 : Number(raw) });
+  };
+
+  const saveDefault = async () => {
     setBusy(true);
-    setError(null);
     try {
-      await api('/settings', { method: 'PUT', body: values });
-      notify('Settings saved');
-      onChanged();
-    } catch (e) {
-      setError(e.message);
+      await api('/settings', { method: 'PUT', body: Object.fromEntries(PERSONAL_FIELDS.map(([k]) => [k, v[k]])) });
+      notify('Saved as default for everyone');
+      onDefaultsSaved();
     } finally {
       setBusy(false);
     }
   };
 
-  const field = ([key, label, type]) => (
-    <label key={key}>
-      {label}{type === 'percent' ? ' (%)' : ''}
-      <input
-        type={type === 'text' ? 'text' : 'number'}
-        step="any"
-        value={type === 'percent' ? (values[key] == null ? '' : Math.round(values[key] * 1000) / 10) : values[key] ?? ''}
-        onChange={(e) => {
-          const raw = e.target.value;
-          const val = type === 'text' ? raw : raw === '' ? null : type === 'percent' ? Number(raw) / 100 : Number(raw);
-          setValues({ ...values, [key]: val });
-        }}
-      />
-    </label>
-  );
-
   return (
-    <div className="page full">
-      <h1 className="title">Settings</h1>
-      {error && <div className="error-box">{error}</div>}
+    <div className={`settings-strip ${open ? 'open' : ''}`}>
+      <button className="strip-head" onClick={() => setOpen(!open)}>
+        <span className="strip-title">Settings</span>
+        <span className="strip-summary">
+          Reach {pct(v.reachRatio)} · Gifting {v.giftingCostPerCreatorGbp == null ? 'not set' : `£${v.giftingCostPerCreatorGbp}`} · Boosting ${v.boostingCostPer1000Usd}/1k · First offer {pct(v.firstOfferShare)}
+          {changed.length > 0 && <em> · {changed.length} changed</em>}
+        </span>
+        <span className="strip-toggle">{open ? '−' : '+'}</span>
+      </button>
+      {open && (
+        <div className="strip-body">
+          <div className="strip-grid">
+            {PERSONAL_FIELDS.map(([key, label, type]) => (
+              <label className="field" key={key}>
+                <span>{label}</span>
+                <input className="line" type="number" step="any" value={show(key, type)} onChange={set(key, type)} />
+              </label>
+            ))}
+          </div>
+          <div className="strip-actions">
+            <button className="text-link" onClick={() => setHow(!how)}>{how ? 'Hide' : 'How it’s calculated'}</button>
+            {changed.length > 0 && <button className="ghost" onClick={() => onChange({})}>Reset to defaults</button>}
+            <button className="ghost" disabled={busy || !changed.length} onClick={saveDefault}>Save as default for everyone</button>
+          </div>
+          {how && <HowItWorks v={v} />}
+        </div>
+      )}
+    </div>
+  );
+}
 
-      <section className="card howto">
-        <h2>How the price is worked out</h2>
-
-        <div className="howto-grid">
-        <div className="howto-block">
-          <h3>1. What one creator costs us</h3>
+export function HowItWorks({ v }) {
+  return (
+    <div className="howto-grid">
+      <div className="howto-block">
+        <h3>1. What one creator costs us</h3>
         <div className="formula">Creator cost = videos per creator × planning cost per video × multi-video factor</div>
         <dl>
           <dt>Planning cost per video</dt>
-          <dd>What we paid per video for that kind of creator (size, platform, market, niche) in past campaigns. We use the 65th percentile: 65% of past bookings cost this or less, so most creators fit inside it.</dd>
+          <dd>What we paid per video for that kind of creator (size, platform, market, niche) in past campaigns: the 65th percentile, so 65% of past bookings cost this or less.</dd>
           <dt>Multi-video factor</dt>
-          <dd>The discount creators give when they make several videos, taken from past bookings. It stays at 1 until we have at least 10 bookings to measure it.</dd>
+          <dd>The discount creators give for several videos, from past bookings. Stays at 1 until there are 10+ bookings to measure it.</dd>
         </dl>
-        </div>
-        <div className="howto-block">
-          <h3>2. Price to quote (Your creators)</h3>
-        <div className="formula">Price = (all creator costs + boosting + paid media + gifting + brand lift / other) ÷ (1 − margin)</div>
-        <p>With a {pct(v.targetMargin)} margin, a package that costs us £10,000 to deliver is quoted at £{Math.round(10000 / (1 - v.targetMargin)).toLocaleString('en-GB')}.</p>
-        </div>
-        <div className="howto-block">
-          <h3>3. Package from a budget (Most views, Balanced, Most videos)</h3>
+      </div>
+      <div className="howto-block">
+        <h3>2. Price to quote</h3>
+        <div className="formula">Price = (creator costs + boosting + paid media + gifting + brand lift / other) ÷ (1 − margin)</div>
+        <p>At a 50% margin, a package that costs us £10,000 is quoted at £20,000.</p>
+      </div>
+      <div className="howto-block">
+        <h3>3. Package from a budget</h3>
         <div className="formula">Creator money = budget × (1 − margin) − boosting − paid media − gifting − brand lift / other</div>
         <p>
-          We then choose how many creators of each size fit inside the creator money. <b>Most views</b> gets the most views.
-          <b> Balanced</b> gets the most views but rewards a mix: +{pct(v.balancedSizeBonus)} for each extra size and +{pct(v.balancedCreatorBonus)} for each extra creator.
-          <b> Most videos</b> gets the most videos first, then the most views. Money left over buys one more of the cheapest creator; anything still left is the negotiation buffer.
+          <b>Most views</b> fits the most views into the creator money. <b>Balanced</b> also rewards a mix (+{pct(v.balancedSizeBonus)} per extra size, +{pct(v.balancedCreatorBonus)} per extra creator).
+          <b> Most videos</b> fits the most videos, then the most views. What's left is the negotiation buffer.
         </p>
-        </div>
-        <div className="howto-block">
-          <h3>4. Results we show the client</h3>
+      </div>
+      <div className="howto-block">
+        <h3>4. What the client sees</h3>
         <dl>
-          <dt>Views (guaranteed)</dt>
-          <dd>We run the campaign 5,000 times using past views for each creator type. The guarantee is the number beaten in 9 of 10 runs, rounded down to the nearest 10,000.</dd>
+          <dt>Guaranteed views</dt>
+          <dd>Beaten in 9 of 10 of 5,000 simulated campaigns, rounded down to 10,000.</dd>
           <dt>Minimum reach</dt>
           <dd>Guaranteed views × {pct(v.reachRatio)}.</dd>
-          <dt>Cost per view</dt>
-          <dd>Price ÷ guaranteed views.</dd>
-          <dt>eCPM</dt>
-          <dd>Price ÷ guaranteed views × 1,000.</dd>
+          <dt>Cost per view · eCPM</dt>
+          <dd>Price ÷ guaranteed views · same × 1,000.</dd>
           <dt>Boosted views</dt>
-          <dd>Boosting budget ÷ ${v.boostingCostPer1000Usd} × 1,000. Shown on its own line, never added to the guarantee.</dd>
-          <dt>Gifted creators</dt>
-          <dd>Cost {v.giftingCostPerCreatorGbp == null ? 'not set yet (counted as £0)' : `£${v.giftingCostPerCreatorGbp} each`}; we assume {pct(v.giftedPostingRate)} of them post one video.</dd>
+          <dd>Boosting budget ÷ ${v.boostingCostPer1000Usd} × 1,000, shown separately.</dd>
         </dl>
-        </div>
-        <div className="howto-block">
-          <h3>5. What stays internal</h3>
+      </div>
+      <div className="howto-block">
+        <h3>5. Internal only</h3>
         <dl>
           <dt>Margin</dt>
-          <dd>(price − everything it costs us to deliver) ÷ price. Flagged below {pct(v.marginWarning)}.</dd>
+          <dd>(price − all delivery costs) ÷ price. Flagged below {pct(v.marginWarning)}.</dd>
           <dt>Creator brief</dt>
-          <dd>First offer = {pct(v.firstOfferShare)} of the typical (median) fee per video; maximum = the planning cost per video.</dd>
+          <dd>First offer {pct(v.firstOfferShare)} of the typical fee per video; maximum = planning cost per video.</dd>
+          <dt>Gifting</dt>
+          <dd>{v.giftingCostPerCreatorGbp == null ? 'Cost not set (counted as £0)' : `£${v.giftingCostPerCreatorGbp} per gifted creator`}; {pct(v.giftedPostingRate)} of them post one video.</dd>
         </dl>
-        </div>
-        </div>
-      </section>
-
-      <div className="settings-grid">
-      <section className="card">
-        <h2>Calculator settings</h2>
-        <div className="grid-3">{FIELDS.map(field)}</div>
-        <div className="row end">
-          <button className="primary" disabled={busy} onClick={() => save()}>Save settings</button>
-        </div>
-      </section>
-      <section className="card">
-        <h2>Slide defaults</h2>
-        <div className="grid-2">{SLIDE_FIELDS.map(field)}</div>
-        <label style={{ marginTop: 18 }}>
-          Extra lines on every slide (one per line, e.g. usage rights, free extras)
-          <textarea
-            rows={3}
-            value={(values.slideExtraLines || []).join('\n')}
-            onChange={(e) => setValues({ ...values, slideExtraLines: e.target.value.split('\n') })}
-          />
-        </label>
-        <div className="row end">
-          <button className="primary" disabled={busy} onClick={() => save()}>Save settings</button>
-        </div>
-      </section>
       </div>
     </div>
   );

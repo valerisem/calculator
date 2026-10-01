@@ -3,6 +3,7 @@ import { api, notify, openUrl } from './api.js';
 import DealPicker from './DealPicker.jsx';
 import PackageCard, { PackageDetails } from './PackageCard.jsx';
 import { fmtInt } from './format.js';
+import { SettingsPanel } from './Settings.jsx';
 
 export function defaultInputs(meta) {
   return {
@@ -24,6 +25,7 @@ export function defaultInputs(meta) {
     maxBigCreators: '',
     allowedSizes: meta.sizes.map((s) => s.key),
     package: {},
+    settings: {},
   };
 }
 
@@ -56,7 +58,7 @@ const packageFromLines = (lines) => {
  * The calculator screen. editing = { packageId, proposalId, kind } when a saved
  * package was opened from a proposal.
  */
-export default function Calculator({ meta, initialInputs, editing, onSaved, onOpenProposal }) {
+export default function Calculator({ meta, initialInputs, editing, onSaved, onOpenProposal, onDefaultsSaved }) {
   const [inputs, setInputs] = useState(() => ({ ...defaultInputs(meta), ...(initialInputs || {}) }));
   const [lines, setLines] = useState(() => linesFromPackage(initialInputs?.package));
   const [set, setSet] = useState(null);
@@ -236,6 +238,13 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
   };
 
   return (
+    <>
+    <SettingsPanel
+      defaults={meta.settings}
+      values={inputs.settings || {}}
+      onChange={(settings) => setInputs({ ...inputs, settings })}
+      onDefaultsSaved={() => { setInputs({ ...inputs, settings: {} }); onDefaultsSaved?.(); }}
+    />
     <div className="split">
       <section className="left">
         <h1 className="title">Creator calculator</h1>
@@ -473,6 +482,7 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
         />
       )}
     </div>
+    </>
   );
 }
 

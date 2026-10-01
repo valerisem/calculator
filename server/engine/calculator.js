@@ -50,6 +50,7 @@ export function normaliseInputs(raw, settings) {
     allowedSizes: allowed,
     package: pkg,
     agreedPrice: optNum(raw.agreedPrice),
+    settings: raw.settings && typeof raw.settings === 'object' ? raw.settings : undefined,
   };
 }
 

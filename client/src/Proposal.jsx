@@ -5,7 +5,7 @@ import PackageCard, { PackageDetails } from './PackageCard.jsx';
 import SlideBox from './SlideBox.jsx';
 
 // A deal's saved packages: choose one, approve it (syncs Pipedrive), download its slide.
-export default function Proposal({ proposalId, settings, onBack, onEdit }) {
+export default function Proposal({ proposalId, settings, onBack, onEdit, onDefaultsSaved }) {
   const [data, setData] = useState(null);
   const [selected, setSelected] = useState(null);
   const [view, setView] = useState('client');
@@ -100,7 +100,7 @@ export default function Proposal({ proposalId, settings, onBack, onEdit }) {
               <button className="ghost danger" disabled={busy} onClick={remove}>Delete</button>
             </div>
             <div className="dash" />
-            <SlideBox pkg={pkg} settings={settings} busy={busy} onError={setError} />
+            <SlideBox pkg={pkg} settings={settings} busy={busy} onError={setError} onDefaultsSaved={onDefaultsSaved} />
           </>
         ) : (
           <p className="muted">No packages saved yet.</p>

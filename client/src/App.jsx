@@ -3,7 +3,6 @@ import { api } from './api.js';
 import Calculator from './Calculator.jsx';
 import { fmtDate } from './format.js';
 import Proposal from './Proposal.jsx';
-import Settings from './Settings.jsx';
 
 export default function App() {
   const [meta, setMeta] = useState(null);
@@ -35,10 +34,9 @@ export default function App() {
       <nav className="nav">
         <button className={tab === 'calculator' ? 'on' : ''} onClick={() => go({ name: 'calculator' })}>Calculator</button>
         <button className={tab === 'proposals' ? 'on' : ''} onClick={() => go({ name: 'proposals' })}>Proposals</button>
-        <button className={tab === 'settings' ? 'on' : ''} onClick={() => go({ name: 'settings' })}>Settings</button>
       </nav>
-      {!meta.rateBuild && view.name !== 'settings' && (
-        <div className="error-box page-callout">The rate table has not been built yet. Open Settings and rebuild it.</div>
+      {!meta.rateBuild && (
+        <div className="error-box page-callout">The rate data is still being prepared. Try again in a minute.</div>
       )}
       {view.name === 'calculator' && (
         <Calculator
@@ -48,6 +46,7 @@ export default function App() {
           editing={view.editing}
           onSaved={() => go({ name: 'proposal', id: view.editing.proposalId })}
           onOpenProposal={(id) => go({ name: 'proposal', id })}
+          onDefaultsSaved={loadMeta}
         />
       )}
       {view.name === 'proposals' && <Proposals onOpen={(id) => go({ name: 'proposal', id })} />}
@@ -56,11 +55,11 @@ export default function App() {
           key={view.key}
           proposalId={view.id}
           settings={meta.settings}
+          onDefaultsSaved={loadMeta}
           onBack={() => go({ name: 'proposals' })}
           onEdit={(pkg) => go({ name: 'calculator', inputs: pkg.inputs, editing: { packageId: pkg.id, proposalId: pkg.proposal_id, kind: pkg.mode } })}
         />
       )}
-      {view.name === 'settings' && <Settings meta={meta} onChanged={loadMeta} />}
     </div>
   );
 }

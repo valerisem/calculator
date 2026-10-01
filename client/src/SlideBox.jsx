@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { api, openUrl } from './api.js';
+import { api, notify, openUrl } from './api.js';
 
 // Slide options for one package: light or dark version and the editable text.
-export default function SlideBox({ pkg, settings, busy, onError }) {
+export default function SlideBox({ pkg, settings, busy, onError, onDefaultsSaved }) {
   const defaults = () => ({
     theme: settings.slideTheme || 'light',
     part: settings.slidePart || '',
@@ -37,6 +37,27 @@ export default function SlideBox({ pkg, settings, busy, onError }) {
     }
   };
 
+  // Theme, part, subtitle, badge, extra lines and sales note become everyone's defaults.
+  const saveDefault = async () => {
+    try {
+      await api('/settings', {
+        method: 'PUT',
+        body: {
+          slideTheme: o.theme,
+          slidePart: o.part,
+          slideSubtitle: o.subtitle,
+          slideBadge: o.badge,
+          slideExtraLines: o.extraLines.split('\n').map((l) => l.trim()).filter(Boolean),
+          slideSalesNote: o.salesNote,
+        },
+      });
+      notify('Slide defaults saved');
+      onDefaultsSaved?.();
+    } catch (e) {
+      onError(e.message);
+    }
+  };
+
   return (
     <div className="slide-box">
       <div className="section-head">
@@ -60,9 +81,12 @@ export default function SlideBox({ pkg, settings, busy, onError }) {
         <label className="field"><span>Estimated sales (leave empty to hide)</span><input className="line" value={o.estimatedSales} onChange={set('estimatedSales')} /></label>
         <label className="field"><span>Sales note</span><input className="line" value={o.salesNote} onChange={set('salesNote')} /></label>
       </div>
-      <button className="cta" disabled={busy || working} onClick={download}>
-        {working ? 'Preparing…' : 'Download slide'} <span>›</span>
-      </button>
+      <div className="actions">
+        <button className="cta" disabled={busy || working} onClick={download}>
+          {working ? 'Preparing…' : 'Download slide'} <span>›</span>
+        </button>
+        <button className="ghost" disabled={busy} onClick={saveDefault}>Save as default</button>
+      </div>
     </div>
   );
 }

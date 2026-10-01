@@ -136,27 +136,39 @@ api.get('/proposals/:id', wrap(async (req, res) => {
 
 // ---- calculator & packages -------------------------------------------------
 
-async function calcContext() {
+// Settings a person can change for their own calculation (inputs.settings).
+// Saved packages keep them in their inputs, so they re-price the same way.
+const PERSONAL_SETTINGS = [
+  'giftingCostPerCreatorGbp', 'giftedPostingRate', 'reachRatio', 'boostingCostPer1000Usd',
+  'firstOfferShare', 'minimumBudgetGbp', 'marginWarning', 'balancedSizeBonus', 'balancedCreatorBonus',
+];
+
+async function calcContext(inputs = {}) {
   const [settings, rates, fx] = await Promise.all([getSettings(), getRates(), getFx()]);
-  if (!rates) throw Object.assign(new Error('The rate table has not been built yet. Open Settings and rebuild rates.'), { status: 409 });
-  return { ctx: { archetypes: rates.archetypes, factors: rates.factors, settings, fx: fx.rates }, buildId: rates.build.id };
+  if (!rates) throw Object.assign(new Error('The rate table is still being built. Try again in a minute.'), { status: 409 });
+  const own = {};
+  for (const k of PERSONAL_SETTINGS) {
+    const v = inputs?.settings?.[k];
+    if (v !== undefined && v !== null && v !== '' && !Number.isNaN(Number(v))) own[k] = Number(v);
+  }
+  return { ctx: { archetypes: rates.archetypes, factors: rates.factors, settings: { ...settings, ...own }, fx: fx.rates }, buildId: rates.build.id };
 }
 
 async function runCalc(inputs) {
-  const { ctx, buildId } = await calcContext();
+  const { ctx, buildId } = await calcContext(inputs);
   return { result: calculate(inputs, ctx), buildId };
 }
 
 // The calculator screen: your creators + suggested mixes at the same price.
 api.post('/calculate', wrap(async (req, res) => {
-  const { ctx } = await calcContext();
+  const { ctx } = await calcContext(req.body?.inputs);
   const set = calculateSet(req.body?.inputs || {}, ctx);
   res.status(set.ok ? 200 : 422).json(set);
 }));
 
 // Number of creators -> "Your creators" lines.
 api.post('/suggest-mix', wrap(async (req, res) => {
-  const { ctx } = await calcContext();
+  const { ctx } = await calcContext(req.body?.inputs);
   const out = suggestMix(req.body?.inputs || {}, req.body?.creators, ctx);
   res.status(out.ok ? 200 : 422).json(out);
 }));
@@ -211,8 +223,13 @@ async function writeLines(packageId, result) {
 // Saves one or more packages to a proposal: { packages: [{ name, kind, inputs }] }.
 api.post('/proposals/:id/packages', wrap(async (req, res) => {
   const list = req.body?.packages || [req.body];
-  const { ctx, buildId } = await calcContext();
-  const results = list.map((p) => ({ p, result: calculate(p.inputs || {}, ctx) }));
+  const results = [];
+  let buildId = null;
+  for (const p of list) {
+    const c = await calcContext(p.inputs);
+    buildId = c.buildId;
+    results.push({ p, result: calculate(p.inputs || {}, c.ctx) });
+  }
   const bad = results.find((r) => !r.result.ok);
   if (bad) return res.status(422).json({ error: `${bad.p.name || 'Package'}: ${bad.result.error}` });
   const saved = [];
