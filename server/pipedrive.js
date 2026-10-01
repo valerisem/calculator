@@ -139,10 +139,13 @@ export async function syncApprovedPackage(dealId, pkg, fxPerGbp) {
   await pd(`/deals/${dealId}`, { method: 'PUT', body });
 
   const fmt = (n) => Number(n).toLocaleString('en-GB', { maximumFractionDigits: 0 });
-  const lines = r.client.creators.map((c) => `<li>${c.count} × ${c.label}, ${c.videosEach} videos each</li>`).join('');
+  const lines = r.client.creators
+    .map((c) => `<li>${c.count} × ${c.label}, ${c.platform}, ${escapeHtml(c.market)}, ${c.videosEach} videos each</li>`)
+    .join('');
   const content = [
     `<b>Approved package: ${escapeHtml(pkg.name)}</b>`,
-    `<p>Price: ${r.currency} ${fmt(price)} · Margin: ${(margin * 100).toFixed(1)}%</p>`,
+    `<p>${escapeHtml([r.inputs.campaign, (r.inputs.platforms || []).join(' & '), (r.inputs.markets || []).join(', '), r.inputs.niche].filter(Boolean).join(' · '))}</p>
+    <p>Price: ${r.currency} ${fmt(price)} · Margin: ${(margin * 100).toFixed(1)}%</p>`,
     `<ul>${lines}</ul>`,
     `<p>${fmt(r.client.totalVideos)} videos · ${fmt(r.client.viewsPromised)} views promised · ${fmt(r.client.reachPromised)} reach` +
       (r.client.giftedCreators ? ` · ${r.client.giftedCreators} gifted creators` : '') +

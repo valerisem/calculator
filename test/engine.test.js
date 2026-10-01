@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { calculate } from '../server/engine/calculator.js';
+import { calculate, calculateSet } from '../server/engine/calculator.js';
 import { DEFAULT_SETTINGS } from '../server/engine/constants.js';
 import { optimise } from '../server/engine/optimiser.js';
 import { buildRateTable, normaliseMarket, pickArchetype } from '../server/engine/rates.js';
@@ -136,4 +136,62 @@ test('budget to package and package to budget agree', () => {
   const usd = calculate({ ...base, mode: 'budget', budget: 25000, currency: 'USD', boosting: 600 }, ctx);
   assert.ok(usd.ok);
   assert.equal(usd.client.boostedViews, 100000); // $600 at $6 per 1,000
+});
+
+test('calculator screen: your creators and one recommendation per objective', () => {
+  const rt = buildRateTable(fakeBookings(), [{ pd_deal_id: 100, wide_niche: 'Tech', account_owner_id: 9 }], settings);
+  const ctx = { ...rt, settings, fx };
+  const base = { market: 'UK', platform: 'TikTok', niche: 'Tech', margin: 0.5, videosPerCreator: 3, currency: 'GBP' };
+  const none = calculateSet(base, ctx);
+  assert.equal(none.yours, null);
+  assert.equal(none.recommended.length, 0);
+  const set = calculateSet({ ...base, budget: 20000, package: { micro_25k_50k: 4 } }, ctx);
+  assert.equal(set.yours.mode, 'package');
+  assert.equal(set.yours.client.totalCreators, 4);
+  assert.deepEqual(set.recommended.map((r) => r.objective), ['Performance', 'Balanced', 'Content']);
+  for (const r of set.recommended) {
+    assert.ok(r.ok, r.error);
+    assert.equal(r.client.price, 20000);
+  }
+});
+
+test('optimiser: options in the same size group count as one size', () => {
+  // Same size in two markets vs a second size. Balanced bonus is per size, not per option.
+  const options = [
+    { key: 'UK|micro', group: 'micro', cost: 1000, views: 10000 },
+    { key: 'DE|micro', group: 'micro', cost: 1000, views: 9990 },
+    { key: 'UK|mid', group: 'mid', cost: 1000, views: 9700 },
+  ];
+  const bal = optimise({ options, creatorMoney: 2000, objective: 'Balanced' });
+  // micro + mid: (10000 + 9700) × 1.06 = 20882 beats two micros (20000 × 1.01 = 20200)
+  assert.deepEqual(bal.counts, { 'UK|micro': 1, 'UK|mid': 1 });
+  const perf = optimise({ options, creatorMoney: 3000, objective: 'Performance' });
+  assert.deepEqual(perf.counts, { 'UK|micro': 3 });
+  // Brute-force check with groups across budgets.
+  const opts = [
+    { key: 'a1', group: 'a', cost: 300, views: 9000 },
+    { key: 'a2', group: 'a', cost: 350, views: 11000 },
+    { key: 'b1', group: 'b', cost: 725, views: 25000 },
+  ];
+  for (const C of [1000, 2475, 5000]) {
+    const res = optimise({ options: opts, creatorMoney: C, objective: 'Performance' });
+    const views = Object.entries(res.counts).reduce((s, [k, m]) => s + m * opts.find((o) => o.key === k).views, 0);
+    assert.equal(views, bruteForce(opts, C).views, `C=${C}`);
+  }
+});
+
+test('several markets: lines priced per market, recommendations choose across them', () => {
+  const rows = fakeBookings().map((b) => ({ ...b }));
+  // A German copy of the data where creators are half the price.
+  const de = fakeBookings().map((b, i) => ({ ...b, id: 10_000 + i, location: 'Germany', fee_gbp: b.fee_gbp / 2 }));
+  const rt = buildRateTable([...rows, ...de], [{ pd_deal_id: 100, wide_niche: 'Tech', account_owner_id: 9 }], settings);
+  const ctx = { ...rt, settings, fx };
+  const base = { platforms: ['TikTok'], markets: ['UK', 'Germany'], niche: 'Tech', margin: 0.5, videosPerCreator: 3, currency: 'GBP' };
+  const uk = calculate({ ...base, mode: 'package', package: { 'TikTok|UK|micro_25k_50k': 4 } }, ctx);
+  const ger = calculate({ ...base, mode: 'package', package: { 'TikTok|Germany|micro_25k_50k': 4 } }, ctx);
+  assert.ok(ger.client.price < uk.client.price);
+  assert.equal(uk.client.creators[0].market, 'UK');
+  const rec = calculate({ ...base, mode: 'budget', budget: 20000, objective: 'Performance' }, ctx);
+  assert.ok(rec.ok, rec.error);
+  assert.ok(rec.client.creators.every((c) => c.market === 'Germany')); // cheaper market wins on views
 });

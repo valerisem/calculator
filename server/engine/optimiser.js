@@ -5,16 +5,18 @@
 // affordable at its exact cost. Extra state dimensions are only added when the
 // objective or a constraint needs them:
 //   n = creators in the package (Content/Balanced, min/max creators, required videos)
-//   s = sizes used (Balanced bonus)
+//   s = sizes used (Balanced bonus, "+5% per extra size used")
 //   b = creators above 350k followers (when a maximum is set)
-// If the state space would be too large, the step is widened in £25
-// increments and the step used is returned.
+// Options are grouped by size (`group`); a size can be bought through several
+// options (e.g. the same size in different markets or platforms) and still
+// counts once towards s. If the state space would be too large, the step is
+// widened in £25 increments and the step used is returned.
 
 const NEG = -Infinity;
 
 /**
  * @param {object} p
- * @param {{key:string,cost:number,views:number,big?:boolean}[]} p.options  per creator: package cost and P25 package views
+ * @param {{key:string,group?:string,cost:number,views:number,big?:boolean}[]} p.options per creator: package cost and P25 package views
  * @param {number} p.creatorMoney  C
  * @param {string} p.objective  Performance | Balanced | Content
  * @param {number} [p.step=25]
@@ -42,6 +44,18 @@ export function optimise(p) {
   if (maxBig === 0) options = options.filter((o) => !o.big);
   if (!options.length) return { feasible: false, reason: 'No allowed creator size fits the creator money.' };
 
+  // Groups of options (one group per size), in first-seen order.
+  const groups = [];
+  const byGroup = new Map();
+  for (const o of options) {
+    const g = o.group ?? o.key;
+    if (!byGroup.has(g)) {
+      byGroup.set(g, []);
+      groups.push(byGroup.get(g));
+    }
+    byGroup.get(g).push(o);
+  }
+
   const needN = objective !== 'Performance' || minCreators > 0 || maxCreators != null;
   const needS = objective === 'Balanced';
   const needB = maxBig != null && options.some((o) => o.big);
@@ -52,7 +66,7 @@ export function optimise(p) {
     return { feasible: false, reason: `Creator money only covers ${nCap} creators; minimum is ${minCreators}.` };
   }
   const nDim = nCap + 1;
-  const sDim = needS ? options.length + 1 : 1;
+  const sDim = needS ? groups.length + 1 : 1;
   const bDim = needB ? maxBig + 1 : 1;
   let U = Math.floor(C / step);
   while ((U + 1) * nDim * sDim * bDim > stateBudget) {
@@ -61,57 +75,85 @@ export function optimise(p) {
   }
   const total = (U + 1) * nDim * sDim * bDim;
   const idx = (c, n, s, b) => ((c * nDim + n) * sDim + s) * bDim + b;
+  const decode = (i) => ({
+    b: i % bDim,
+    s: Math.floor(i / bDim) % sDim,
+    n: Math.floor(i / (bDim * sDim)) % nDim,
+    c: Math.floor(i / (bDim * sDim * nDim)),
+  });
+  const unitsOf = (o) => Math.ceil(o.cost / step);
+  const dn = needN ? 1 : 0;
+  const ds = needS ? 1 : 0;
 
   let table = new Float64Array(total).fill(NEG);
   table[idx(0, 0, 0, 0)] = 0;
-  const units = options.map((o) => Math.ceil(o.cost / step));
-  const choices = [];
+  // Per group: whether the best state uses the group, and per option how many
+  // creators it adds and whether the chain started from "group not used yet".
+  const trail = [];
 
-  options.forEach((o, k) => {
-    const u = units[k];
-    const dn = needN ? 1 : 0;
-    const ds = needS ? 1 : 0;
-    const db = needB && o.big ? 1 : 0;
-    const A = new Float64Array(total).fill(NEG);
-    const cntA = new Uint16Array(total);
-    const choice = new Uint16Array(total);
-    const next = table.slice();
-    for (let c = u; c <= U; c++) {
-      for (let n = dn; n < nDim; n++) {
-        for (let s = 0; s < sDim; s++) {
-          for (let b = db; b < bDim; b++) {
-            const i = idx(c, n, s, b);
-            let best = NEG;
-            let cnt = 0;
-            // first creator of this size: comes from the table before this size
-            if (s - ds >= 0) {
-              const prev = table[idx(c - u, n - dn, s - ds, b - db)];
-              if (prev !== NEG) {
-                best = prev + o.views;
-                cnt = 1;
+  for (const group of groups) {
+    const U0 = table; // states with no creator of this size yet
+    let U1 = new Float64Array(total).fill(NEG); // states with at least one
+    const steps = [];
+    for (const o of group) {
+      const u = unitsOf(o);
+      const db = needB && o.big ? 1 : 0;
+      const A = U1.slice();
+      const cnt = new Uint16Array(total);
+      const fromU0 = new Uint8Array(total);
+      for (let c = u; c <= U; c++) {
+        for (let n = dn; n < nDim; n++) {
+          for (let s = 0; s < sDim; s++) {
+            for (let b = db; b < bDim; b++) {
+              const i = idx(c, n, s, b);
+              let best = A[i];
+              let k = 0;
+              let start = 0;
+              // first creator of this size, through this option
+              if (s - ds >= 0) {
+                const v0 = U0[idx(c - u, n - dn, s - ds, b - db)];
+                if (v0 !== NEG && v0 + o.views > best) {
+                  best = v0 + o.views;
+                  k = 1;
+                  start = 1;
+                }
               }
-            }
-            // another creator of this size
-            const j = idx(c - u, n - dn, s, b - db);
-            if (A[j] !== NEG && A[j] + o.views > best) {
-              best = A[j] + o.views;
-              cnt = cntA[j] + 1;
-            }
-            if (best !== NEG) {
-              A[i] = best;
-              cntA[i] = cnt;
-              if (best > next[i]) {
-                next[i] = best;
-                choice[i] = cnt;
+              const j = idx(c - u, n - dn, s, b - db);
+              // size already used through an earlier option
+              if (U1[j] !== NEG && U1[j] + o.views > best) {
+                best = U1[j] + o.views;
+                k = 1;
+                start = 0;
+              }
+              // another creator through this option
+              if (cnt[j] > 0 && A[j] + o.views > best) {
+                best = A[j] + o.views;
+                k = cnt[j] + 1;
+                start = fromU0[j];
+              }
+              if (k > 0) {
+                A[i] = best;
+                cnt[i] = k;
+                fromU0[i] = start;
               }
             }
           }
         }
       }
+      steps.push({ o, u, db, cnt, fromU0 });
+      U1 = A;
     }
-    choices.push(choice);
+    const used = new Uint8Array(total);
+    const next = U0.slice();
+    for (let i = 0; i < total; i++) {
+      if (U1[i] > next[i]) {
+        next[i] = U1[i];
+        used[i] = 1;
+      }
+    }
+    trail.push({ used, steps });
     table = next;
-  });
+  }
 
   // Pick the best end state under the objective and constraints.
   let bestI = -1;
@@ -139,48 +181,48 @@ export function optimise(p) {
   }
   if (bestI < 0) return { feasible: false, reason: 'No package meets the constraints with this creator money.' };
 
-  // Walk back through the per-size choices.
-  let rem = bestI;
-  const decode = (i) => {
-    const b = i % bDim;
-    const s = Math.floor(i / bDim) % sDim;
-    const n = Math.floor(i / (bDim * sDim)) % nDim;
-    const c = Math.floor(i / (bDim * sDim * nDim));
-    return { c, n, s, b };
-  };
-  const counts = new Array(options.length).fill(0);
-  for (let k = options.length - 1; k >= 0; k--) {
-    const m = choices[k][rem];
-    counts[k] = m;
-    if (m > 0) {
-      const st = decode(rem);
-      rem = idx(
-        st.c - m * units[k],
-        st.n - (needN ? m : 0),
-        st.s - (needS ? 1 : 0),
-        st.b - (needB && options[k].big ? m : 0),
-      );
+  // Walk back through the groups and their options.
+  const counts = new Map();
+  let i = bestI;
+  for (let g = groups.length - 1; g >= 0; g--) {
+    const { used, steps } = trail[g];
+    if (!used[i]) continue;
+    for (let k = steps.length - 1; k >= 0; k--) {
+      const st = steps[k];
+      const m = st.cnt[i];
+      if (!m) continue;
+      counts.set(st.o.key, (counts.get(st.o.key) || 0) + m);
+      const start = st.fromU0[i];
+      const d = decode(i);
+      i = idx(d.c - m * st.u, d.n - m * dn, d.s - (start ? ds : 0), d.b - m * st.db);
+      if (start) break; // the chain began before any creator of this size
     }
   }
 
   // Money left over buys one more creator from the cheapest allowed size while it fits.
-  let allocated = counts.reduce((sum, m, k) => sum + m * options[k].cost, 0);
-  let creators = counts.reduce((a, b) => a + b, 0);
-  let bigCount = counts.reduce((a, m, k) => a + (options[k].big ? m : 0), 0);
-  const byCost = options.map((o, k) => ({ o, k })).sort((a, b) => a.o.cost - b.o.cost);
+  let allocated = 0;
+  let creators = 0;
+  let bigCount = 0;
+  for (const o of options) {
+    const m = counts.get(o.key) || 0;
+    allocated += m * o.cost;
+    creators += m;
+    if (o.big) bigCount += m;
+  }
+  const byCost = [...options].sort((a, b) => a.cost - b.cost);
   for (;;) {
     if (maxCreators != null && creators >= maxCreators) break;
-    const pick = byCost.find(({ o }) => o.cost <= C - allocated && !(o.big && maxBig != null && bigCount >= maxBig));
+    const pick = byCost.find((o) => o.cost <= C - allocated && !(o.big && maxBig != null && bigCount >= maxBig));
     if (!pick) break;
-    counts[pick.k]++;
-    allocated += pick.o.cost;
+    counts.set(pick.key, (counts.get(pick.key) || 0) + 1);
+    allocated += pick.cost;
     creators++;
-    if (pick.o.big) bigCount++;
+    if (pick.big) bigCount++;
   }
 
   return {
     feasible: true,
-    counts: Object.fromEntries(options.map((o, k) => [o.key, counts[k]]).filter(([, m]) => m > 0)),
+    counts: Object.fromEntries(options.map((o) => [o.key, counts.get(o.key) || 0]).filter(([, m]) => m > 0)),
     allocated,
     buffer: C - allocated,
     step,

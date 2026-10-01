@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { requireMonday, signDownload, verifyDownload } from './auth.js';
 import { config } from './config.js';
 import { db, getRates, getSettings, logEvent, must, rebuildRates, saveSettings, supabase } from './db.js';
-import { calculate } from './engine/calculator.js';
+import { calculate, calculateSet } from './engine/calculator.js';
 import { OBJECTIVES, PLATFORMS, SIZE_BANDS } from './engine/constants.js';
 import { CURRENCIES, getFx } from './fx.js';
 import * as pipedrive from './pipedrive.js';
@@ -84,7 +84,7 @@ api.post('/pipedrive/deals', wrap(async (req, res) => {
 api.get('/proposals', wrap(async (_req, res) => {
   const rows = await must(
     db().from('pc_proposals')
-      .select('id,pd_deal_id,deal_title,org_name,currency,status,updated_at,pc_packages(count)')
+      .select('id,pd_deal_id,deal_title,campaign_name,org_name,currency,status,updated_at,pc_packages!pc_packages_proposal_id_fkey(count)')
       .order('updated_at', { ascending: false })
       .limit(30),
   );
@@ -103,6 +103,7 @@ api.post('/proposals', wrap(async (req, res) => {
     org_name: deal.orgName,
     currency: deal.currency || 'GBP',
     updated_at: new Date().toISOString(),
+    ...(req.body?.campaignName ? { campaign_name: String(req.body.campaignName).trim() } : {}),
   };
   let proposal;
   if (existing) {
@@ -130,23 +131,31 @@ api.get('/proposals/:id', wrap(async (req, res) => {
 
 // ---- calculator & packages -------------------------------------------------
 
-async function runCalc(inputs) {
+async function calcContext() {
   const [settings, rates, fx] = await Promise.all([getSettings(), getRates(), getFx()]);
   if (!rates) throw Object.assign(new Error('The rate table has not been built yet. Open Settings and rebuild rates.'), { status: 409 });
-  const result = calculate(inputs, { archetypes: rates.archetypes, factors: rates.factors, settings, fx: fx.rates });
-  return { result, buildId: rates.build.id };
+  return { ctx: { archetypes: rates.archetypes, factors: rates.factors, settings, fx: fx.rates }, buildId: rates.build.id };
 }
 
+async function runCalc(inputs) {
+  const { ctx, buildId } = await calcContext();
+  return { result: calculate(inputs, ctx), buildId };
+}
+
+// The calculator screen: your creators + suggested mixes at the same price.
 api.post('/calculate', wrap(async (req, res) => {
-  const { result } = await runCalc(req.body?.inputs || {});
-  res.status(result.ok ? 200 : 422).json(result);
+  const { ctx } = await calcContext();
+  const set = calculateSet(req.body?.inputs || {}, ctx);
+  res.status(set.ok ? 200 : 422).json(set);
 }));
 
-function packageColumns(result) {
+const KINDS = ['yours', 'performance', 'balanced', 'content', 'custom'];
+
+function packageColumns(result, kind) {
   const c = result.client;
   const i = result.internal;
   return {
-    mode: result.mode,
+    mode: KINDS.includes(kind) ? kind : 'custom',
     inputs: result.inputs,
     result,
     currency: result.currency,
@@ -169,47 +178,54 @@ function packageColumns(result) {
 
 async function writeLines(packageId, result) {
   await must(db().from('pc_package_lines').delete().eq('package_id', packageId));
-  const sizes = Object.fromEntries(result.internal.sizes.map((s) => [s.size, s]));
-  const briefBySize = Object.fromEntries(result.internal.brief.map((b) => [b.size, b]));
-  const rows = result.client.creators.map((c) => ({
+  const sizes = Object.fromEntries(result.internal.sizes.map((x) => [x.key, x]));
+  const rows = result.client.creators.map((c, k) => ({
     package_id: packageId,
     size_band: c.size,
+    platform: c.platform,
+    market: c.market,
     creators: c.count,
     videos_each: c.videosEach,
-    package_cost: sizes[c.size]?.packageCost,
-    first_offer_per_video: briefBySize[c.label]?.firstOfferPerVideo,
-    max_fee_per_video: briefBySize[c.label]?.maxFeePerVideo,
-    target_views_per_video: briefBySize[c.label]?.targetViewsPerVideo,
-    confidence: sizes[c.size]?.confidence,
-    fallback_level: sizes[c.size]?.level,
+    package_cost: sizes[c.key]?.packageCost,
+    first_offer_per_video: result.internal.brief[k]?.firstOfferPerVideo,
+    max_fee_per_video: result.internal.brief[k]?.maxFeePerVideo,
+    target_views_per_video: result.internal.brief[k]?.targetViewsPerVideo,
+    confidence: sizes[c.key]?.confidence,
+    fallback_level: sizes[c.key]?.level,
   }));
   if (rows.length) await must(db().from('pc_package_lines').insert(rows));
 }
 
+// Saves one or more packages to a proposal: { packages: [{ name, kind, inputs }] }.
 api.post('/proposals/:id/packages', wrap(async (req, res) => {
-  const { name, inputs } = req.body || {};
-  const { result, buildId } = await runCalc(inputs || {});
-  if (!result.ok) return res.status(422).json(result);
-  const count = (await must(db().from('pc_packages').select('id').eq('proposal_id', req.params.id))).length;
-  const pkg = await must(
-    db().from('pc_packages').insert({
-      proposal_id: req.params.id,
-      name: name?.trim() || `Option ${String.fromCharCode(65 + count)}`,
-      rate_build_id: buildId,
-      created_by: req.user.label,
-      updated_by: req.user.label,
-      ...packageColumns(result),
-    }).select().single(),
-  );
-  await writeLines(pkg.id, result);
+  const list = req.body?.packages || [req.body];
+  const { ctx, buildId } = await calcContext();
+  const results = list.map((p) => ({ p, result: calculate(p.inputs || {}, ctx) }));
+  const bad = results.find((r) => !r.result.ok);
+  if (bad) return res.status(422).json({ error: `${bad.p.name || 'Package'}: ${bad.result.error}` });
+  const saved = [];
+  for (const { p, result } of results) {
+    const pkg = await must(
+      db().from('pc_packages').insert({
+        proposal_id: req.params.id,
+        name: p.name?.trim() || 'Package',
+        rate_build_id: buildId,
+        created_by: req.user.label,
+        updated_by: req.user.label,
+        ...packageColumns(result, p.kind),
+      }).select().single(),
+    );
+    await writeLines(pkg.id, result);
+    await logEvent({ proposalId: req.params.id, packageId: pkg.id, action: 'package_created', actor: req.user.label });
+    saved.push(pkg);
+  }
   await touchProposal(req.params.id);
-  await logEvent({ proposalId: req.params.id, packageId: pkg.id, action: 'package_created', actor: req.user.label });
-  res.json(pkg);
+  res.json(saved);
 }));
 
 api.put('/packages/:id', wrap(async (req, res) => {
   const current = await must(db().from('pc_packages').select('*').eq('id', req.params.id).single());
-  const { name, inputs } = req.body || {};
+  const { name, inputs, kind } = req.body || {};
   const { result, buildId } = await runCalc(inputs || current.inputs);
   if (!result.ok) return res.status(422).json(result);
   const pkg = await must(
@@ -219,7 +235,7 @@ api.put('/packages/:id', wrap(async (req, res) => {
       version: current.version + 1,
       updated_by: req.user.label,
       updated_at: new Date().toISOString(),
-      ...packageColumns(result),
+      ...packageColumns(result, kind || current.mode),
     }).eq('id', current.id).select().single(),
   );
   await writeLines(pkg.id, result);

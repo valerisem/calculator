@@ -35,7 +35,8 @@ export async function buildSlide({ proposal, pkg }) {
   s.addText(proposal.org_name || proposal.deal_title || 'Creator campaign', {
     x: 0.6, y: 0.4, w: 9, h: 0.6, fontFace: 'Arial', fontSize: 28, bold: true, color: NAVY,
   });
-  s.addText(`${pkg.name} · ${r.inputs.platform} · ${r.inputs.market}${r.inputs.niche ? ` · ${r.inputs.niche}` : ''}`, {
+  const inp = r.inputs || {};
+  s.addText([inp.campaign || pkg.name, (inp.platforms || [inp.platform]).filter(Boolean).join(' & '), (inp.markets || [inp.market]).filter(Boolean).join(', '), inp.niche].filter(Boolean).join(' · '), {
     x: 0.6, y: 1.0, w: 12, h: 0.4, fontFace: 'Arial', fontSize: 14, color: MUTED,
   });
 
@@ -57,7 +58,8 @@ export async function buildSlide({ proposal, pkg }) {
   const head = ['Creator size', 'Creators', 'Videos each', 'Videos'].map((t) => ({
     text: t, options: { bold: true, color: 'FFFFFF', fill: { color: NAVY } },
   }));
-  const rows = c.creators.map((cr) => [cr.label, fmtInt(cr.count), fmtInt(cr.videosEach), fmtInt(cr.videos)]);
+  const several = (inp.platforms?.length || 1) > 1 || (inp.markets?.length || 1) > 1;
+  const rows = c.creators.map((cr) => [several ? `${cr.label} · ${cr.platform} · ${cr.market}` : cr.label, fmtInt(cr.count), fmtInt(cr.videosEach), fmtInt(cr.videos)]);
   if (c.giftedCreators) rows.push(['Gifted creators', fmtInt(c.giftedCreators), '–', fmtInt(c.giftedPosts)]);
   rows.push([
     { text: 'Total', options: { bold: true } },
@@ -66,7 +68,7 @@ export async function buildSlide({ proposal, pkg }) {
     { text: fmtInt(c.totalVideos), options: { bold: true } },
   ]);
   s.addTable([head, ...rows], {
-    x: 0.6, y: 3.6, w: 7.6, colW: [3.4, 1.4, 1.4, 1.4], fontFace: 'Arial', fontSize: 12, color: NAVY,
+    x: 0.6, y: 3.6, w: 7.6, colW: [4.0, 1.2, 1.2, 1.2], fontFace: 'Arial', fontSize: 12, color: NAVY,
     border: { type: 'solid', color: 'E2E2EA', pt: 0.75 }, rowH: Math.min(0.36, 3.0 / (rows.length + 1)), valign: 'middle',
   });
 
