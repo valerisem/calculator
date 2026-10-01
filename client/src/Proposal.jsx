@@ -99,7 +99,6 @@ export default function Proposal({ proposalId, meta, settings, onBack, onEdit, o
         <div className="dash" />
         {pkg ? (
           <>
-            <div className="section-head"><h2>{pkg.name}</h2>{pkg.is_approved && <span className="badge">Approved</span>}</div>
             <p className="muted small">
               {(pkg.result.inputs.platforms || []).join(' & ')} · {(pkg.result.inputs.markets || []).join(', ')}{pkg.result.inputs.niche ? ` · ${pkg.result.inputs.niche}` : ''} · {pkg.result.inputs.videosPerCreator} videos per creator · version {pkg.version}
             </p>
