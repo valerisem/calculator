@@ -1,15 +1,31 @@
 import { NANO_KEY, PLATFORMS, SIZE_BANDS, SIZE_BY_KEY } from './constants.js';
 import { optimise } from './optimiser.js';
-import { multiVideoFactor, pickArchetype } from './rates.js';
+import { multiVideoFactor, pickArchetype, pickViewsRow } from './rates.js';
 import { hashString } from './stats.js';
 import { simulateViews } from './simulate.js';
 
 const num = (v, d = 0) => (v === '' || v == null || Number.isNaN(Number(v)) ? d : Number(v));
 const optNum = (v) => (v === '' || v == null || Number.isNaN(Number(v)) ? null : Number(v));
+const round2 = (x) => Math.round(x * 100) / 100;
+const round4 = (x) => Math.round(x * 10000) / 10000;
+
+export const USAGE_RIGHTS = ['organic', '30d', '3m', '6m', '12m', 'perpetual'];
+export const EXCLUSIVITY = ['none', 'category', 'competitor'];
+export const BOOST_PLATFORMS = ['TikTok', 'Instagram', 'YouTube', 'Other'];
+export const ADJUSTMENT_REASONS = [
+  'Client willingness to pay',
+  'Competitive match',
+  'Strategic / new logo',
+  'Volume or repeat client',
+  'Scope or risk',
+  'Other',
+];
+export const PRICING_CONTEXTS = ['New business', 'Test campaign', 'Renewal', 'Upsell', 'Competitive pitch'];
 
 // A creator type in a package: platform | market | size band.
 export const comboKey = (platform, market, size) => `${platform}|${market}|${size}`;
 const list = (many, one) => [...new Set((Array.isArray(many) ? many : []).concat(one ? [one] : []).filter(Boolean))];
+const feeType = (t) => (t === 'fixed' ? 'fixed' : 'percent');
 
 export function normaliseInputs(raw, settings) {
   const platforms = list(raw.platforms, raw.platform).filter((p) => PLATFORMS.includes(p));
@@ -28,6 +44,48 @@ export function normaliseInputs(raw, settings) {
   const allowed = Array.isArray(raw.allowedSizes) && raw.allowedSizes.length
     ? raw.allowedSizes.filter((k) => SIZE_BY_KEY[k])
     : SIZE_BANDS.map((b) => b.key);
+
+  // Boosting: one line per platform. Old saves had a single number.
+  const boostRaw = Array.isArray(raw.boostingLines)
+    ? raw.boostingLines
+    : num(raw.boosting) > 0 ? [{ platform: platforms[0], budget: num(raw.boosting) }] : [];
+  const boostingLines = boostRaw
+    .map((b) => ({
+      platform: BOOST_PLATFORMS.includes(b.platform) ? b.platform : 'Other',
+      by: b.by === 'views' ? 'views' : 'budget',
+      budget: num(b.budget),
+      targetViews: num(b.targetViews),
+      cpmUsd: optNum(b.cpmUsd),
+      treatment: b.treatment === 'passthrough' ? 'passthrough' : 'margin',
+      feeType: feeType(b.feeType),
+      fee: num(b.fee),
+    }))
+    .filter((b) => (b.by === 'views' ? b.targetViews > 0 : b.budget > 0));
+
+  // Paid media: pass-through spend plus a management fee. Old saves had a single number.
+  const pm = raw.paidMedia && typeof raw.paidMedia === 'object' ? raw.paidMedia : { spend: num(raw.paidMedia) };
+  const paidMedia = {
+    platform: pm.platform || '',
+    spend: num(pm.spend),
+    feeType: feeType(pm.feeType ?? settings.paidMediaFeeType),
+    fee: pm.fee == null || pm.fee === '' ? num(settings.paidMediaFee) : num(pm.fee),
+  };
+
+  const usage = {
+    rights: USAGE_RIGHTS.includes(raw.usage?.rights) ? raw.usage.rights : 'organic',
+    paidUsage: !!raw.usage?.paidUsage,
+    exclusivity: EXCLUSIVITY.includes(raw.usage?.exclusivity) ? raw.usage.exclusivity : 'none',
+  };
+
+  const c = raw.commercial || {};
+  const commercial = {
+    adjustmentPct: num(c.adjustmentPct),
+    finalPrice: optNum(c.finalPrice) ?? optNum(raw.agreedPrice),
+    reason: c.reason || '',
+    context: c.context || '',
+    note: c.note || '',
+  };
+
   return {
     campaign: String(raw.campaign || '').trim(),
     mode: raw.mode === 'package' ? 'package' : 'budget',
@@ -40,25 +98,34 @@ export function normaliseInputs(raw, settings) {
     margin: raw.margin == null || raw.margin === '' ? settings.targetMargin : num(raw.margin),
     videosPerCreator: Math.max(1, Math.round(num(raw.videosPerCreator, settings.defaultVideosPerCreator))),
     gifted: Math.max(0, Math.round(num(raw.gifted))),
-    boosting: num(raw.boosting),
-    paidMedia: num(raw.paidMedia),
+    boostingLines,
+    paidMedia,
     otherCosts: num(raw.otherCosts),
+    usage,
+    commercial,
     requiredVideos: optNum(raw.requiredVideos),
     minCreators: optNum(raw.minCreators),
     maxCreators: optNum(raw.maxCreators),
     maxBigCreators: optNum(raw.maxBigCreators),
     allowedSizes: allowed,
     package: pkg,
-    agreedPrice: optNum(raw.agreedPrice),
     settings: raw.settings && typeof raw.settings === 'object' ? raw.settings : undefined,
   };
 }
 
 /**
- * Runs the calculator.
+ * Runs the calculator for one package.
  * @param {object} rawInputs see normaliseInputs
  * @param {{archetypes:object[], factors:object, settings:object, fx:Record<string,number>}} ctx
  *   fx: units of each currency per 1 GBP
+ *
+ * Costs that carry the campaign margin: creators (with usage/exclusivity
+ * uplift), gifting, brand-lift study / other direct costs, and boosting lines
+ * set to "campaign margin". Pass-through: paid media spend and boosting lines
+ * set to "pass-through"; their management fees are added on top.
+ *   standard quote = margin costs ÷ (1 − margin) + pass-through spend + fees
+ *   final quote    = standard × (1 + adjustment) or a typed final price
+ *   margin         = (quote − all delivery costs) ÷ quote
  */
 export function calculate(rawInputs, ctx) {
   const { archetypes, factors, settings, fx } = ctx;
@@ -67,60 +134,95 @@ export function calculate(rawInputs, ctx) {
   if (!rate) return fail(`No exchange rate for ${inp.currency}.`);
   const toGbp = (x) => x / rate;
   const fromGbp = (x) => x * rate;
+  const usdToClient = (usd) => (usd / (fx.USD || 1)) * rate;
   const warnings = [];
   const M = inp.margin;
   const v = inp.videosPerCreator;
   if (!(M >= 0 && M < 1)) return fail('Target margin must be between 0% and 99%.');
   if (!inp.markets.length) return fail('Choose a market.');
 
-  // Section 3: rate row per creator type (platform x market x size), with fallback.
+  // Usage rights and exclusivity raise what creators cost us.
+  const uplift =
+    num(settings.usageRightsUplift?.[inp.usage.rights]) +
+    (inp.usage.paidUsage ? num(settings.paidUsageUplift) : 0) +
+    num(settings.exclusivityUplift?.[inp.usage.exclusivity]);
+  const upliftUnset =
+    (inp.usage.rights !== 'organic' && !num(settings.usageRightsUplift?.[inp.usage.rights])) ||
+    (inp.usage.paidUsage && !num(settings.paidUsageUplift)) ||
+    (inp.usage.exclusivity !== 'none' && !num(settings.exclusivityUplift?.[inp.usage.exclusivity]));
+  if (upliftUnset) warnings.push('Usage rights / exclusivity uplift is set to 0% in Settings, so it adds no cost yet.');
+
+  // Section 3: cost row (spec fallback) and views row (minimum-sample rule) per creator type.
+  const minSample = settings.guaranteeMinSample || 10;
   const combos = {};
   const rateFor = (platform, market, size) => {
     const key = comboKey(platform, market, size);
     if (!(key in combos)) {
       const band = SIZE_BY_KEY[size];
-      const row = pickArchetype(archetypes, { market, platform, niche: inp.niche, size });
+      const q = { market, platform, niche: inp.niche, size };
+      const row = pickArchetype(archetypes, q);
+      const vrow = row && pickViewsRow(archetypes, q, minSample);
       const F = multiVideoFactor(factors, size, v);
-      combos[key] = row && {
+      combos[key] = row && vrow ? {
         key,
         size,
         platform,
         market,
         label: band.label,
+        tier: band.tier,
         big: !!band.big,
         confidence: row.confidence,
         level: row.level,
         levelLabel: row.levelLabel,
         lowFallback: row.lowFallback,
         records: Math.min(row.n_cost, row.n_views),
-        costP50: row.cost_p50,
-        costP65: row.cost_p65,
-        viewsP25: row.views_p25,
-        viewsP50: row.views_p50,
-        viewsP75: row.views_p75,
+        costP50: row.cost_p50 * (1 + uplift),
+        costP65: row.cost_p65 * (1 + uplift),
+        viewsLevel: vrow.levelLabel,
+        viewsRecords: vrow.n_views,
+        viewsThin: vrow.thin,
+        viewsP25: vrow.views_p25,
+        viewsP50: vrow.views_p50,
+        viewsP75: vrow.views_p75,
         factor: F,
-        packageCostGbp: v * row.cost_p65 * F,
-        packageViewsP25: v * row.views_p25,
-      };
+        packageCostGbp: v * row.cost_p65 * (1 + uplift) * F,
+        packageViewsP25: v * vrow.views_p25,
+      } : null;
     }
     return combos[key];
   };
 
+  // Add-ons and media, in GBP.
   const g = settings.giftingCostPerCreatorGbp;
-  if (inp.gifted > 0 && g == null) warnings.push('Gifting cost per creator is not set in Settings; gifting is costed at 0.');
+  if (inp.gifted > 0 && g == null) warnings.push('Gifting cost per gift is not set in Settings; gifting is costed at 0.');
   const giftingGbp = inp.gifted * (g || 0);
-  const otherGbp = toGbp(inp.boosting) + toGbp(inp.paidMedia) + toGbp(inp.otherCosts) + giftingGbp;
+  const otherGbp = toGbp(inp.otherCosts);
+  const boosts = inp.boostingLines.map((b) => {
+    const cpmUsd = b.cpmUsd ?? num(settings.boostingCpmUsd?.[b.platform], settings.boostingCostPer1000Usd);
+    const cpmClient = usdToClient(cpmUsd);
+    const budget = b.by === 'views' ? (b.targetViews / 1000) * cpmClient : b.budget;
+    const fee = b.treatment === 'passthrough' ? (b.feeType === 'fixed' ? b.fee : (budget * b.fee) / 100) : 0;
+    return { ...b, cpmUsd, budget: round2(budget), fee: round2(fee), views: cpmClient > 0 ? Math.floor((budget / cpmClient) * 1000) : 0 };
+  });
+  const boostMarginGbp = toGbp(boosts.filter((b) => b.treatment === 'margin').reduce((s, b) => s + b.budget, 0));
+  const boostPassGbp = toGbp(boosts.filter((b) => b.treatment === 'passthrough').reduce((s, b) => s + b.budget, 0));
+  const boostFeesGbp = toGbp(boosts.reduce((s, b) => s + b.fee, 0));
+  const pmSpendGbp = toGbp(inp.paidMedia.spend);
+  const pmFeeGbp = inp.paidMedia.spend > 0 ? toGbp(inp.paidMedia.feeType === 'fixed' ? inp.paidMedia.fee : (inp.paidMedia.spend * inp.paidMedia.fee) / 100) : 0;
+  const marginAddOnsGbp = giftingGbp + otherGbp + boostMarginGbp; // carry the campaign margin
+  const passGbp = pmSpendGbp + boostPassGbp; // pass-through spend
+  const feesGbp = pmFeeGbp + boostFeesGbp; // management fees (revenue)
   const giftedPosts = Math.floor(inp.gifted * settings.giftedPostingRate);
 
   let counts;
-  let priceGbp;
+  let standardGbp;
   let creatorMoneyGbp;
   let optimiserStep = null;
 
   if (inp.mode === 'budget') {
     if (!(inp.budget > 0)) return fail('Enter the client budget.');
-    priceGbp = toGbp(inp.budget);
-    creatorMoneyGbp = priceGbp * (1 - M) - otherGbp;
+    standardGbp = toGbp(inp.budget);
+    creatorMoneyGbp = (standardGbp - passGbp - feesGbp) * (1 - M) - marginAddOnsGbp;
     if (creatorMoneyGbp <= 0) return fail('Budget too small for these costs.');
     let options = [];
     for (const size of inp.allowedSizes) {
@@ -165,11 +267,9 @@ export function calculate(rawInputs, ctx) {
       counts[k] = n;
     }
     if (!Object.keys(counts).length) return fail('Add at least one creator to the package.');
-    const K = Object.entries(counts).reduce((s, [k, n]) => s + n * combos[k].packageCostGbp, 0) + otherGbp;
-    priceGbp = K / (1 - M);
+    creatorMoneyGbp = Object.entries(counts).reduce((s, [k, n]) => s + n * combos[k].packageCostGbp, 0);
     // Quote in whole currency units, rounded up so the margin is never below target.
-    priceGbp = toGbp(Math.ceil(fromGbp(priceGbp)));
-    creatorMoneyGbp = K - otherGbp;
+    standardGbp = toGbp(Math.ceil(fromGbp((creatorMoneyGbp + marginAddOnsGbp) / (1 - M) + passGbp + feesGbp)));
   }
 
   const order = (k) => SIZE_BANDS.findIndex((b) => b.key === combos[k].size);
@@ -179,31 +279,55 @@ export function calculate(rawInputs, ctx) {
   const allocatedGbp = lines.reduce((s, l) => s + l.count * l.packageCostGbp, 0);
   const totalCreators = lines.reduce((s, l) => s + l.count, 0);
   const totalVideos = totalCreators * v + giftedPosts;
+  const deliveryGbp = allocatedGbp + marginAddOnsGbp + passGbp;
 
-  // Section 4, step 4: simulation.
-  const nano = rateFor(inp.platforms[0], inp.markets[0], NANO_KEY);
+  // Commercial adjustment (proposal only): standard quote -> final quote.
+  const standard = fromGbp(standardGbp);
+  const finalPrice = inp.commercial.finalPrice != null
+    ? inp.commercial.finalPrice
+    : Math.round(standard * (1 + inp.commercial.adjustmentPct / 100));
+  const finalGbp = toGbp(finalPrice);
+  const standardMargin = (standardGbp - deliveryGbp) / standardGbp;
+  const effectiveMargin = (finalGbp - deliveryGbp) / finalGbp;
+  const adjusted = Math.abs(finalPrice - standard) >= 1;
+
+  // Section 4, step 4: simulation, overall and per tier.
+  const nano = inp.gifted > 0 ? rateFor(inp.platforms[0], inp.markets[0], NANO_KEY) : null;
   if (inp.gifted > 0 && !nano) warnings.push('No nano-size rate data, so gifted posts add no views.');
+  const groupOf = (l) => ({ count: l.count, videos: v, p25: l.viewsP25, p50: l.viewsP50, p75: l.viewsP75 });
+  const giftedGroup = nano ? { count: inp.gifted, postingRate: settings.giftedPostingRate, p25: nano.viewsP25, p50: nano.viewsP50, p75: nano.viewsP75 } : null;
   const seed = hashString(JSON.stringify([counts, v, inp.gifted, inp.niche]));
-  const sim = simulateViews(
-    lines.map((l) => ({ count: l.count, videos: v, p25: l.viewsP25, p50: l.viewsP50, p75: l.viewsP75 })),
-    nano ? { count: inp.gifted, postingRate: settings.giftedPostingRate, p25: nano.viewsP25, p50: nano.viewsP50, p75: nano.viewsP75 } : null,
-    { runs: settings.simulationRuns, seed },
-  );
-  const promiseRaw = sim.percentile(settings.promisePercentile);
-  const viewsPromised = Math.floor(promiseRaw / 10_000) * 10_000;
-  const price = fromGbp(priceGbp);
-  const boostPer1000 = (settings.boostingCostPer1000Usd / (fx.USD || 1)) * rate;
-  const deliveryGbp = allocatedGbp + otherGbp;
-  const expectedMargin = (priceGbp - deliveryGbp) / priceGbp;
-  const realMargin = inp.agreedPrice ? (inp.agreedPrice - fromGbp(deliveryGbp)) / inp.agreedPrice : null;
-
-  if (priceGbp < settings.minimumBudgetGbp) warnings.push(`Budget is below the £${settings.minimumBudgetGbp.toLocaleString('en-GB')} minimum.`);
-  if (expectedMargin < settings.marginWarning) warnings.push(`Expected margin ${(expectedMargin * 100).toFixed(1)}% is below ${settings.marginWarning * 100}%.`);
-  if (realMargin != null && realMargin < settings.marginWarning) warnings.push(`Margin at the agreed price is ${(realMargin * 100).toFixed(1)}%, below ${settings.marginWarning * 100}%.`);
-  for (const l of lines) {
-    if (l.lowFallback) warnings.push(`${l.label} (${l.platform}, ${l.market}): only Low-confidence data (${l.records} records, ${l.levelLabel}).`);
+  const runs = settings.simulationRuns;
+  const sim = simulateViews(lines.map(groupOf), giftedGroup, { runs, seed });
+  const pctl = settings.promisePercentile;
+  const viewsPromised = Math.floor(sim.percentile(pctl) / 10_000) * 10_000;
+  const roundTier = (x) => (x >= 100_000 ? Math.floor(x / 10_000) * 10_000 : Math.floor(x / 1_000) * 1_000);
+  const tierSummary = (tier, creators, videos, ts) => ({
+    tier,
+    creators,
+    videos,
+    guaranteedViews: roundTier(ts.percentile(pctl)),
+    low: Math.round(ts.percentile(25)),
+    likely: Math.round(ts.p50),
+    high: Math.round(ts.p75),
+  });
+  const tiers = [...new Set(lines.map((l) => l.tier))].map((tier, i) => {
+    const tl = lines.filter((l) => l.tier === tier);
+    const creators = tl.reduce((s, l) => s + l.count, 0);
+    return tierSummary(tier, creators, creators * v, simulateViews(tl.map(groupOf), null, { runs, seed: seed + i + 1 }));
+  });
+  if (giftedGroup && inp.gifted > 0) {
+    tiers.push(tierSummary('Gifted', inp.gifted, giftedPosts, simulateViews([], giftedGroup, { runs, seed: seed + 99 })));
   }
-  if (viewsPromised === 0) warnings.push('Views we promise round down to 0 (under 10,000).');
+
+  const boostedViews = boosts.reduce((s, b) => s + b.views, 0);
+  if (finalGbp < settings.minimumBudgetGbp) warnings.push(`Budget is below the £${settings.minimumBudgetGbp.toLocaleString('en-GB')} minimum.`);
+  if (effectiveMargin < settings.marginWarning) warnings.push(`Margin ${(effectiveMargin * 100).toFixed(1)}% is below ${settings.marginWarning * 100}%.`);
+  for (const l of lines) {
+    if (l.lowFallback) warnings.push(`${l.label} (${l.platform}, ${l.market}): cost from Low-confidence data (${l.records} records).`);
+    if (l.viewsThin) warnings.push(`${l.label} (${l.platform}, ${l.market}): only ${l.viewsRecords} view records even at "${l.viewsLevel}", so the guarantee is less reliable.`);
+  }
+  if (viewsPromised === 0) warnings.push('Guaranteed views round down to 0 (under 10,000).');
 
   // Section 4, step 5: campaign team brief.
   let n0 = 1;
@@ -216,12 +340,10 @@ export function calculate(rawInputs, ctx) {
       platform: l.platform,
       market: l.market,
       count: l.count,
-      followers: l.label.replace(/^\w+\s/, ''),
       targetViewsPerVideo: Math.round(l.viewsP50),
       videos: v,
       firstOfferPerVideo: round2(fromGbp(settings.firstOfferShare * l.costP50)),
       maxFeePerVideo: round2(fromGbp(l.costP65 * l.factor)),
-      text: `${l.count === 1 ? `Creator ${from}` : `Creators ${from}–${n0 - 1}`}: ${l.label}, ${l.platform}, ${l.market}, about ${Math.round(l.viewsP50).toLocaleString('en-GB')} views per video, ${v} videos`,
     };
   });
 
@@ -232,37 +354,50 @@ export function calculate(rawInputs, ctx) {
     currency: inp.currency,
     fxPerGbp: rate,
     client: {
-      price: round2(price),
+      price: round2(finalPrice),
       currency: inp.currency,
-      creators: lines.map((l) => ({ key: l.key, size: l.size, label: l.label, platform: l.platform, market: l.market, count: l.count, videosEach: v, videos: l.count * v })),
+      creators: lines.map((l) => ({ key: l.key, size: l.size, label: l.label, tier: l.tier, platform: l.platform, market: l.market, count: l.count, videosEach: v, videos: l.count * v })),
       totalCreators,
       totalVideos,
       giftedCreators: inp.gifted,
       giftedPosts,
       viewsPromised,
-      reachPromised: Math.floor(viewsPromised * settings.reachRatio),
-      cpm: viewsPromised ? round2((price / viewsPromised) * 1000) : null,
-      cpv: viewsPromised ? round4(price / viewsPromised) : null,
-      boostedViews: inp.boosting > 0 ? Math.floor((inp.boosting / boostPer1000) * 1000) : 0,
+      tierGuarantees: tiers.map(({ tier, creators, videos, guaranteedViews }) => ({ tier, creators, videos, guaranteedViews })),
+      reachPromised: null, // no historical reach data yet
+      cpm: viewsPromised ? round2((finalPrice / viewsPromised) * 1000) : null,
+      cpv: viewsPromised ? round4(finalPrice / viewsPromised) : null,
+      boostedViews,
+      paidMediaPlatform: inp.paidMedia.spend > 0 ? inp.paidMedia.platform : '',
+      usage: inp.usage,
     },
     internal: {
+      viewsLow: Math.round(sim.percentile(25)),
       viewsExpected: Math.round(sim.p50),
       viewsUpside: Math.round(sim.p75),
+      tiers,
+      standardPrice: round2(standard),
+      finalPrice: round2(finalPrice),
+      adjusted,
+      adjustmentPct: round4(standard ? (finalPrice / standard - 1) * 100 : 0),
+      commercial: inp.commercial,
+      standardMargin: round4(standardMargin),
+      expectedMargin: round4(effectiveMargin),
       creatorMoney: round2(fromGbp(creatorMoneyGbp)),
       creatorMoneyAllocated: round2(fromGbp(allocatedGbp)),
       buffer: round2(fromGbp(Math.max(0, creatorMoneyGbp - allocatedGbp))),
+      usageUplift: round4(uplift),
+      boosting: boosts,
       costs: {
         creators: round2(fromGbp(allocatedGbp)),
-        boosting: inp.boosting,
-        paidMedia: inp.paidMedia,
         gifting: round2(fromGbp(giftingGbp)),
         other: inp.otherCosts,
+        boostingWithMargin: round2(fromGbp(boostMarginGbp)),
+        boostingPassThrough: round2(fromGbp(boostPassGbp)),
+        paidMedia: inp.paidMedia.spend,
+        fees: round2(fromGbp(feesGbp)),
         total: round2(fromGbp(deliveryGbp)),
       },
-      expectedMargin: round4(expectedMargin),
-      agreedPrice: inp.agreedPrice,
-      realMargin: realMargin == null ? null : round4(realMargin),
-      creatorMoneyShare: round4(creatorMoneyGbp / priceGbp),
+      creatorMoneyShare: round4(allocatedGbp / finalGbp),
       historicalCreatorMoneyShare: settings.historicalCreatorMoneyShare,
       optimiserStepGbp: optimiserStep,
       sizes: Object.values(combos).filter(Boolean).map((s) => ({
@@ -274,6 +409,8 @@ export function calculate(rawInputs, ctx) {
         confidence: s.confidence,
         level: s.levelLabel,
         records: s.records,
+        viewsLevel: s.viewsLevel,
+        viewsRecords: s.viewsRecords,
         costP50: round2(fromGbp(s.costP50)),
         costP65: round2(fromGbp(s.costP65)),
         factor: round4(s.factor),
@@ -292,8 +429,6 @@ export function calculate(rawInputs, ctx) {
 function fail(error) {
   return { ok: false, error };
 }
-const round2 = (x) => Math.round(x * 100) / 100;
-const round4 = (x) => Math.round(x * 10000) / 10000;
 
 // The calculator screen. "Your creators" is the package the client wants,
 // priced as package to budget (section 5). Each recommended package is budget
@@ -310,7 +445,7 @@ export function calculateSet(rawInputs, ctx) {
     : null;
   const budget = Number(rawInputs.budget) > 0 ? Number(rawInputs.budget) : null;
   const recommended = budget
-    ? RECOMMENDATIONS.map((r) => ({ ...r, ...calculate({ ...rawInputs, mode: 'budget', objective: r.objective }, ctx) }))
+    ? RECOMMENDATIONS.map((r) => ({ ...r, ...calculate({ ...rawInputs, mode: 'budget', objective: r.objective, commercial: {} }, ctx) }))
     : [];
   return { ok: true, yours, recommended };
 }

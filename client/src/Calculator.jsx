@@ -4,6 +4,7 @@ import DealPicker from './DealPicker.jsx';
 import PackageCard, { PackageDetails } from './PackageCard.jsx';
 import { fmtInt } from './format.js';
 import { SettingsPanel } from './Settings.jsx';
+import AddOns from './AddOns.jsx';
 
 export function defaultInputs(meta) {
   return {
@@ -16,8 +17,9 @@ export function defaultInputs(meta) {
     margin: meta.settings.targetMargin,
     videosPerCreator: meta.settings.defaultVideosPerCreator,
     gifted: 0,
-    boosting: 0,
-    paidMedia: 0,
+    boostingLines: [],
+    paidMedia: { platform: '', spend: '', feeType: meta.settings.paidMediaFeeType, fee: meta.settings.paidMediaFee },
+    usage: { rights: 'organic', paidUsage: false, exclusivity: 'none' },
     otherCosts: 0,
     requiredVideos: '',
     minCreators: '',
@@ -137,7 +139,7 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
         budget: inputs.budget || prefill.budget || '',
         markets: inputs.markets.length ? inputs.markets : markets,
         niche: inputs.niche || (meta.niches.some((n) => n.name === prefill.niche) ? prefill.niche : ''),
-        paidMedia: Number(inputs.paidMedia) ? inputs.paidMedia : prefill.paidMedia || 0,
+        paidMedia: Number(inputs.paidMedia?.spend) || !prefill.paidMedia ? inputs.paidMedia : { ...inputs.paidMedia, spend: prefill.paidMedia },
       };
       setInputs(next);
     } catch (e) {
@@ -383,16 +385,11 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
         <div className="dash" />
 
         <div className="section-head">
-          <h2>Extra costs</h2>
+          <h2>Add-ons & media</h2>
         </div>
-        <div className="row2">
-          <label className="field"><span>Gifted creators</span><input className="line" type="number" min="0" value={inputs.gifted} onChange={set1('gifted')} /></label>
-          <label className="field"><span>Boosting budget, {inputs.currency}</span><input className="line" type="number" min="0" value={inputs.boosting} onChange={set1('boosting')} /></label>
-          <label className="field"><span>Paid media, {inputs.currency}</span><input className="line" type="number" min="0" value={inputs.paidMedia} onChange={set1('paidMedia')} /></label>
-          <label className="field"><span>Brand lift / other, {inputs.currency}</span><input className="line" type="number" min="0" value={inputs.otherCosts} onChange={set1('otherCosts')} /></label>
-        </div>
+        <AddOns meta={meta} inputs={inputs} setInputs={setInputs} />
 
-        <button className="text-link toggle" onClick={() => setShowMore(!showMore)}>
+                <button className="text-link toggle" onClick={() => setShowMore(!showMore)}>
           {showMore ? '− Hide' : '+ Show'} constraints for recommended packages
         </button>
         {showMore && (

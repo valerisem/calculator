@@ -105,7 +105,7 @@ export async function buildSlide({ proposal, pkg, options = {} }) {
   const c = r.client;
   const inp = r.inputs || {};
   const cur = r.currency;
-  const price = pkg.agreed_price ?? c.price;
+  const price = c.price; // final quote, after any commercial adjustment
   const brand = proposal.org_name || '';
   const campaign = inp.campaign || proposal.campaign_name || 'Influencer campaign';
   const title = (brand ? `${campaign} for ${brand}` : campaign).toUpperCase();
@@ -178,7 +178,7 @@ export async function buildSlide({ proposal, pkg, options = {} }) {
   const ecpm = c.viewsPromised ? (price / c.viewsPromised) * 1000 : null;
   const tiles = [
     [short(c.viewsPromised), 'Video views'],
-    [short(c.reachPromised), 'Minimum reach'],
+    [int(c.totalVideos), 'Videos'],
     [cpv ? money(cpv, cur, 3) : '–', 'Cost per view'],
     [ecpm ? money(ecpm, cur, 2) : '–', 'eCPM'],
   ];

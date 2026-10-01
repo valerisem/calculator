@@ -3,15 +3,15 @@ import { api, notify, openUrl } from './api.js';
 import { fmtDate } from './format.js';
 import PackageCard, { PackageDetails } from './PackageCard.jsx';
 import SlideBox from './SlideBox.jsx';
+import Commercial from './Commercial.jsx';
 
 // A deal's saved packages: choose one, approve it (syncs Pipedrive), download its slide.
-export default function Proposal({ proposalId, settings, onBack, onEdit, onDefaultsSaved }) {
+export default function Proposal({ proposalId, meta, settings, onBack, onEdit, onDefaultsSaved }) {
   const [data, setData] = useState(null);
   const [selected, setSelected] = useState(null);
   const [view, setView] = useState('client');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  const [agreed, setAgreed] = useState('');
 
   const load = async () => {
     const d = await api(`/proposals/${proposalId}`);
@@ -26,7 +26,6 @@ export default function Proposal({ proposalId, settings, onBack, onEdit, onDefau
   }, [proposalId]);
 
   const pkg = data?.packages.find((p) => p.id === selected);
-  useEffect(() => setAgreed(pkg?.inputs?.agreedPrice ?? ''), [pkg?.id]);
 
   if (error && !data) return <div className="page"><div className="error-box">{error}</div></div>;
   if (!data) return <div className="page muted">Loading…</div>;
@@ -62,10 +61,10 @@ export default function Proposal({ proposalId, settings, onBack, onEdit, onDefau
   }, 'Package deleted');
 
 
-  const saveAgreed = () => run(async () => {
-    await api(`/packages/${pkg.id}`, { method: 'PUT', body: { inputs: { ...pkg.inputs, agreedPrice: agreed === '' ? null : Number(agreed) } } });
+  const saveCommercial = (commercial) => run(async () => {
+    await api(`/packages/${pkg.id}`, { method: 'PUT', body: { inputs: { ...pkg.inputs, agreedPrice: null, commercial } } });
     await load();
-  }, 'Agreed price saved');
+  }, 'Adjustment saved');
 
   return (
     <div className="split">
@@ -85,13 +84,7 @@ export default function Proposal({ proposalId, settings, onBack, onEdit, onDefau
             <p className="muted small">
               {(pkg.result.inputs.platforms || []).join(' & ')} · {(pkg.result.inputs.markets || []).join(', ')}{pkg.result.inputs.niche ? ` · ${pkg.result.inputs.niche}` : ''} · {pkg.result.inputs.videosPerCreator} videos per creator · version {pkg.version}
             </p>
-            <label className="field">
-              <span>Agreed price, {pkg.currency} <em>if different from {Number(pkg.client_price).toLocaleString('en-GB')}</em></span>
-              <div className="inline">
-                <input className="line" type="number" min="0" value={agreed} onChange={(e) => setAgreed(e.target.value)} />
-                <button className="ghost" disabled={busy || String(agreed) === String(pkg.inputs?.agreedPrice ?? '')} onClick={saveAgreed}>Save</button>
-              </div>
-            </label>
+            <Commercial pkg={pkg} meta={meta} busy={busy} onSave={saveCommercial} />
             <div className="actions">
               {pkg.is_approved
                 ? <button className="ghost" disabled={busy} onClick={withdraw}>Withdraw approval</button>

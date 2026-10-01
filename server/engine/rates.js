@@ -209,3 +209,24 @@ export function pickArchetype(archetypes, { market, platform, niche, size }) {
   }
   return firstLow;
 }
+
+/**
+ * Picks the row whose views feed the simulation (and so the P10 guarantee).
+ * Needs at least `minSample` view records; otherwise falls back to a broader
+ * level, down to size only. If even that is short, the broadest row with data
+ * is used and flagged.
+ */
+export function pickViewsRow(archetypes, { market, platform, niche, size }, minSample) {
+  const q = { market, platform, niche };
+  let broadest = null;
+  for (const lvl of LEVELS) {
+    if (lvl.dims.some((d) => !q[d])) continue;
+    const row = archetypes.find(
+      (a) => a.level === lvl.level && a.size_band === size && lvl.dims.every((d) => a[d] === q[d]) && a.views_p50 != null,
+    );
+    if (!row) continue;
+    if (row.n_views >= minSample) return { ...row, levelLabel: lvl.label, thin: false };
+    broadest = { ...row, levelLabel: lvl.label, thin: true };
+  }
+  return broadest;
+}

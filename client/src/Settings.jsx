@@ -4,15 +4,36 @@ import { api, notify } from './api.js';
 const pct = (x) => `${Math.round(Number(x) * 1000) / 10}%`;
 
 // Settings a person can change for their own calculation.
-export const PERSONAL_FIELDS = [
-  ['giftingCostPerCreatorGbp', 'Gifting cost per creator (£)', 'number'],
-  ['giftedPostingRate', 'Gifted creators who post (%)', 'percent'],
-  ['reachRatio', 'Reach as share of views (%)', 'percent'],
-  ['boostingCostPer1000Usd', 'Boosting cost per 1,000 views ($)', 'number'],
-  ['firstOfferShare', 'First offer, share of typical fee (%)', 'percent'],
-  ['marginWarning', 'Warn when margin is below (%)', 'percent'],
-  ['minimumBudgetGbp', 'Warn when budget is below (£)', 'number'],
+// [key, label, type, sub-key for settings that are small tables]
+export const PERSONAL_GROUPS = [
+  ['General', [
+    ['giftingCostPerCreatorGbp', 'Cost per gift (£)', 'number'],
+    ['giftedPostingRate', 'Gifted creators who post (%)', 'percent'],
+    ['firstOfferShare', 'First offer, share of typical fee (%)', 'percent'],
+    ['marginWarning', 'Warn when margin is below (%)', 'percent'],
+    ['minimumBudgetGbp', 'Warn when budget is below (£)', 'number'],
+    ['guaranteeMinSample', 'Min. records for a guarantee', 'number'],
+  ]],
+  ['Boosting CPM ($ per 1,000 views)', [
+    ['boostingCpmUsd', 'TikTok', 'number', 'TikTok'],
+    ['boostingCpmUsd', 'Instagram', 'number', 'Instagram'],
+    ['boostingCpmUsd', 'YouTube', 'number', 'YouTube'],
+    ['boostingCpmUsd', 'Other', 'number', 'Other'],
+    ['paidMediaFee', 'Default paid media fee (%)', 'number'],
+  ]],
+  ['Usage rights & exclusivity uplift on creator cost (%)', [
+    ['usageRightsUplift', '30 days', 'percent', '30d'],
+    ['usageRightsUplift', '3 months', 'percent', '3m'],
+    ['usageRightsUplift', '6 months', 'percent', '6m'],
+    ['usageRightsUplift', '12 months', 'percent', '12m'],
+    ['usageRightsUplift', 'Perpetual', 'percent', 'perpetual'],
+    ['paidUsageUplift', 'Paid usage / whitelisting', 'percent'],
+    ['exclusivityUplift', 'Category exclusivity', 'percent', 'category'],
+    ['exclusivityUplift', 'Competitor restriction', 'percent', 'competitor'],
+  ]],
 ];
+export const PERSONAL_FIELDS = PERSONAL_GROUPS.flatMap(([, f]) => f);
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 /**
  * Collapsible settings strip at the top of the calculator. Changes apply to
@@ -23,12 +44,17 @@ export function SettingsPanel({ defaults, values, onChange, onDefaultsSaved }) {
   const [how, setHow] = useState(false);
   const [busy, setBusy] = useState(false);
   const v = { ...defaults, ...values };
-  const changed = Object.keys(values).filter((k) => values[k] !== undefined && values[k] !== defaults[k]);
+  const changed = Object.keys(values).filter((k) => values[k] !== undefined && !same(values[k], defaults[k]));
 
-  const show = (key, type) => (v[key] == null ? '' : type === 'percent' ? Math.round(v[key] * 1000) / 10 : v[key]);
-  const set = (key, type) => (e) => {
+  const read = (key, sub) => (sub ? v[key]?.[sub] : v[key]);
+  const show = (key, type, sub) => {
+    const x = read(key, sub);
+    return x == null ? '' : type === 'percent' ? Math.round(x * 1000) / 10 : x;
+  };
+  const set = (key, type, sub) => (e) => {
     const raw = e.target.value;
-    onChange({ ...values, [key]: raw === '' ? null : type === 'percent' ? Number(raw) / 100 : Number(raw) });
+    const val = raw === '' ? null : type === 'percent' ? Number(raw) / 100 : Number(raw);
+    onChange({ ...values, [key]: sub ? { ...v[key], [sub]: val } : val });
   };
 
   const saveDefault = async () => {
@@ -47,21 +73,26 @@ export function SettingsPanel({ defaults, values, onChange, onDefaultsSaved }) {
       <button className="strip-head" onClick={() => setOpen(!open)}>
         <span className="strip-title">Settings</span>
         <span className="strip-summary">
-          Reach {pct(v.reachRatio)} · Gifting {v.giftingCostPerCreatorGbp == null ? 'not set' : `£${v.giftingCostPerCreatorGbp}`} · Boosting ${v.boostingCostPer1000Usd}/1k · First offer {pct(v.firstOfferShare)}
+          Gift {v.giftingCostPerCreatorGbp == null ? 'not set' : `£${v.giftingCostPerCreatorGbp}`} · Boosting CPM TikTok ${v.boostingCpmUsd?.TikTok} · Meta ${v.boostingCpmUsd?.Instagram} · Paid media fee {v.paidMediaFee}% · First offer {pct(v.firstOfferShare)}
           {changed.length > 0 && <em> · {changed.length} changed</em>}
         </span>
         <span className="strip-toggle">{open ? '−' : '+'}</span>
       </button>
       {open && (
         <div className="strip-body">
-          <div className="strip-grid">
-            {PERSONAL_FIELDS.map(([key, label, type]) => (
-              <label className="field" key={key}>
-                <span>{label}</span>
-                <input className="line" type="number" step="any" value={show(key, type)} onChange={set(key, type)} />
-              </label>
-            ))}
-          </div>
+          {PERSONAL_GROUPS.map(([title, fields]) => (
+            <div key={title}>
+              <div className="strip-group">{title}</div>
+              <div className="strip-grid">
+                {fields.map(([key, label, type, sub]) => (
+                  <label className="field" key={key + (sub || '')}>
+                    <span>{label}</span>
+                    <input className="line" type="number" step="any" value={show(key, type, sub)} onChange={set(key, type, sub)} />
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
           <div className="strip-actions">
             <button className="text-link" onClick={() => setHow(!how)}>{how ? 'Hide' : 'How it’s calculated'}</button>
             {changed.length > 0 && <button className="ghost" onClick={() => onChange({})}>Reset to defaults</button>}
@@ -79,7 +110,7 @@ export function HowItWorks({ v }) {
     <div className="howto-grid">
       <div className="howto-block">
         <h3>1. What one creator costs us</h3>
-        <div className="formula">Creator cost = videos per creator × planning cost per video × multi-video factor</div>
+        <div className="formula">Creator cost = videos per creator × planning cost per video × multi-video factor × (1 + usage/exclusivity uplift)</div>
         <dl>
           <dt>Planning cost per video</dt>
           <dd>What we paid per video for that kind of creator (size, platform, market, niche) in past campaigns: the 65th percentile, so 65% of past bookings cost this or less.</dd>
@@ -89,12 +120,13 @@ export function HowItWorks({ v }) {
       </div>
       <div className="howto-block">
         <h3>2. Price to quote</h3>
-        <div className="formula">Price = (creator costs + boosting + paid media + gifting + brand lift / other) ÷ (1 − margin)</div>
-        <p>At a 50% margin, a package that costs us £10,000 is quoted at £20,000.</p>
+        <div className="formula">Standard quote = (creators + gifting + brand-lift / other + boosting with margin) ÷ (1 − margin) + paid media + pass-through boosting + management fees</div>
+        <div className="formula">Final quote = standard quote × (1 + commercial adjustment)</div>
+        <p>Paid media is passed through at cost plus a management fee; it never gets the campaign margin. Effective margin = (final quote − all delivery costs) ÷ final quote.</p>
       </div>
       <div className="howto-block">
         <h3>3. Package from a budget</h3>
-        <div className="formula">Creator money = budget × (1 − margin) − boosting − paid media − gifting − brand lift / other</div>
+        <div className="formula">Creator money = (budget − paid media − pass-through boosting − fees) × (1 − margin) − gifting − brand-lift / other − boosting with margin</div>
         <p>
           <b>Most views</b> fits the most views into the creator money. <b>Balanced</b> also rewards a mix (+{pct(v.balancedSizeBonus)} per extra size, +{pct(v.balancedCreatorBonus)} per extra creator).
           <b> Most videos</b> fits the most videos, then the most views. What's left is the negotiation buffer.
@@ -103,21 +135,23 @@ export function HowItWorks({ v }) {
       <div className="howto-block">
         <h3>4. What the client sees</h3>
         <dl>
-          <dt>Guaranteed views</dt>
-          <dd>Beaten in 9 of 10 of 5,000 simulated campaigns, rounded down to 10,000.</dd>
-          <dt>Minimum reach</dt>
-          <dd>Guaranteed views × {pct(v.reachRatio)}.</dd>
-          <dt>Cost per view · eCPM</dt>
-          <dd>Price ÷ guaranteed views · same × 1,000.</dd>
+          <dt>Guaranteed views (P10), overall and by tier</dt>
+          <dd>Beaten in 9 of 10 of 5,000 simulated campaigns. Only segments with at least {v.guaranteeMinSample} view records are used; otherwise a broader benchmark.</dd>
+          <dt>Cost per guaranteed view</dt>
+          <dd>Final quote ÷ guaranteed views.</dd>
+          <dt>Effective CPM</dt>
+          <dd>Final quote ÷ guaranteed views × 1,000.</dd>
           <dt>Boosted views</dt>
-          <dd>Boosting budget ÷ ${v.boostingCostPer1000Usd} × 1,000, shown separately.</dd>
+          <dd>Boosting budget ÷ platform CPM × 1,000, shown separately. Or plan backwards: budget = target views ÷ 1,000 × CPM.</dd>
         </dl>
       </div>
       <div className="howto-block">
         <h3>5. Internal only</h3>
         <dl>
+          <dt>Expected performance</dt>
+          <dd>Low P25 · likely P50 · high P75 of the simulated campaigns.</dd>
           <dt>Margin</dt>
-          <dd>(price − all delivery costs) ÷ price. Flagged below {pct(v.marginWarning)}.</dd>
+          <dd>Standard and effective. Flagged below {pct(v.marginWarning)}.</dd>
           <dt>Creator brief</dt>
           <dd>First offer {pct(v.firstOfferShare)} of the typical fee per video; maximum = planning cost per video.</dd>
           <dt>Gifting</dt>

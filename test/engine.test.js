@@ -129,7 +129,7 @@ test('budget to package and package to budget agree', () => {
   assert.ok(p.client.price <= 20000);
   assert.equal(p.client.viewsPromised, b.client.viewsPromised);
 
-  const tooSmall = calculate({ ...base, mode: 'budget', budget: 1000, currency: 'GBP', paidMedia: 600 }, ctx);
+  const tooSmall = calculate({ ...base, mode: 'budget', budget: 1000, currency: 'GBP', paidMedia: 1200 }, ctx);
   assert.equal(tooSmall.ok, false);
   assert.match(tooSmall.error, /Budget too small/);
 
@@ -205,4 +205,36 @@ test('number of creators fills your creators', async () => {
   assert.equal(Object.values(hist.package).reduce((a, b) => a + b, 0), 7);
   const withBudget = suggestMix({ ...base, budget: 20000 }, 7, ctx);
   assert.equal(Object.values(withBudget.package).reduce((a, b) => a + b, 0), 7);
+});
+
+test('paid media is pass-through plus fee; boosting margin treatment; commercial adjustment; tier guarantees', () => {
+  const rt = buildRateTable(fakeBookings(), [{ pd_deal_id: 100, wide_niche: 'Tech', account_owner_id: 9 }], settings);
+  const ctx = { ...rt, settings, fx };
+  const base = { markets: ['UK'], platforms: ['TikTok'], niche: 'Tech', margin: 0.5, videosPerCreator: 3, currency: 'GBP', mode: 'package', package: { 'TikTok|UK|micro_25k_50k': 4, 'TikTok|UK|mid_100k_150k': 1 } };
+  const plain = calculate(base, ctx);
+  // £10,000 media at 10% fee adds exactly £11,000 to the quote, not £20,000.
+  const media = calculate({ ...base, paidMedia: { spend: 10000, feeType: 'percent', fee: 10 } }, ctx);
+  assert.ok(Math.abs(media.internal.standardPrice - plain.internal.standardPrice - 11000) <= 1);
+  // Boosting with campaign margin doubles at 50%; as pass-through + £100 fee it adds budget + fee.
+  const boostM = calculate({ ...base, boostingLines: [{ platform: 'TikTok', budget: 1000 }] }, ctx);
+  const boostP = calculate({ ...base, boostingLines: [{ platform: 'TikTok', budget: 1000, treatment: 'passthrough', feeType: 'fixed', fee: 100 }] }, ctx);
+  assert.ok(Math.abs(boostM.internal.standardPrice - plain.internal.standardPrice - 2000) <= 1);
+  assert.ok(Math.abs(boostP.internal.standardPrice - plain.internal.standardPrice - 1100) <= 1);
+  // Platform CPM: $6 default; reverse mode from target views.
+  const byViews = calculate({ ...base, currency: 'USD', boostingLines: [{ platform: 'Instagram', by: 'views', targetViews: 200000, cpmUsd: 0.5 }] }, ctx);
+  assert.equal(byViews.internal.boosting[0].budget, 100);
+  assert.equal(byViews.client.boostedViews, 200000);
+  // Commercial adjustment keeps the standard quote and changes the final one.
+  const up = calculate({ ...base, commercial: { adjustmentPct: 15, reason: 'Client willingness to pay' } }, ctx);
+  assert.equal(up.internal.standardPrice, plain.internal.standardPrice);
+  assert.equal(up.client.price, Math.round(plain.internal.standardPrice * 1.15));
+  assert.ok(up.internal.expectedMargin > plain.internal.expectedMargin);
+  // Tier guarantees: one per tier; reach is not produced.
+  assert.deepEqual(plain.client.tierGuarantees.map((t) => t.tier), ['Micro', 'Mid']);
+  assert.equal(plain.client.reachPromised, null);
+  assert.ok(plain.internal.viewsLow <= plain.internal.viewsExpected && plain.internal.viewsExpected <= plain.internal.viewsUpside);
+  // Usage uplift raises creator cost.
+  const s2 = { ...settings, usageRightsUplift: { ...settings.usageRightsUplift, '12m': 0.5 } };
+  const lic = calculate({ ...base, usage: { rights: '12m' } }, { ...ctx, settings: s2 });
+  assert.ok(Math.abs(lic.internal.costs.creators - plain.internal.costs.creators * 1.5) < 1);
 });

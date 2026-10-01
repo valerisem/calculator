@@ -44,8 +44,20 @@ export const DEFAULT_SETTINGS = {
   planningPercentile: 65,
   giftingCostPerCreatorGbp: null, // "Set from Richie's campaigns" — must be entered
   giftedPostingRate: 0.5,
-  reachRatio: 0.85,
+  // Reach is not shown: there is no historical reach data yet. Kept for later.
+  reachRatio: null,
+  // The guarantee (P10) only uses a segment with at least this many view records.
+  guaranteeMinSample: 10,
   boostingCostPer1000Usd: 6,
+  // Planning CPM for boosting, per platform (USD per 1,000 views). Editable per proposal.
+  boostingCpmUsd: { TikTok: 6, Instagram: 6, YouTube: 6, Other: 6 },
+  // Paid media is pass-through spend plus a management fee.
+  paidMediaFeeType: 'percent',
+  paidMediaFee: 0,
+  // Uplift on creator cost for usage rights and exclusivity (0.5 = +50%). No data yet: set them here.
+  usageRightsUplift: { organic: 0, '30d': 0, '3m': 0, '6m': 0, '12m': 0, perpetual: 0 },
+  paidUsageUplift: 0,
+  exclusivityUplift: { none: 0, category: 0, competitor: 0 },
   firstOfferShare: 0.85,
   balancedSizeBonus: 0.05,
   balancedCreatorBonus: 0.01,

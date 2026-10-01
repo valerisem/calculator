@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { requireMonday, signDownload, verifyDownload } from './auth.js';
 import { config } from './config.js';
 import { db, getRates, getSettings, logEvent, must, rebuildRates, saveSettings, supabase } from './db.js';
-import { calculate, calculateSet, suggestMix } from './engine/calculator.js';
+import { ADJUSTMENT_REASONS, BOOST_PLATFORMS, EXCLUSIVITY, PRICING_CONTEXTS, USAGE_RIGHTS, calculate, calculateSet, suggestMix } from './engine/calculator.js';
 import { OBJECTIVES, PLATFORMS, SIZE_BANDS } from './engine/constants.js';
 import { CURRENCIES, getFx } from './fx.js';
 import * as pipedrive from './pipedrive.js';
@@ -51,6 +51,11 @@ api.get('/meta', wrap(async (_req, res) => {
     platforms: PLATFORMS,
     objectives: OBJECTIVES,
     currencies: CURRENCIES,
+    usageRights: USAGE_RIGHTS,
+    exclusivity: EXCLUSIVITY,
+    boostPlatforms: BOOST_PLATFORMS,
+    adjustmentReasons: ADJUSTMENT_REASONS,
+    pricingContexts: PRICING_CONTEXTS,
     markets: sorted(markets),
     niches: sorted(niches),
     rateBuild: rates ? { id: rates.build.id, builtAt: rates.build.built_at, stats: rates.build.stats } : null,
@@ -139,9 +144,12 @@ api.get('/proposals/:id', wrap(async (req, res) => {
 // Settings a person can change for their own calculation (inputs.settings).
 // Saved packages keep them in their inputs, so they re-price the same way.
 const PERSONAL_SETTINGS = [
-  'giftingCostPerCreatorGbp', 'giftedPostingRate', 'reachRatio', 'boostingCostPer1000Usd',
+  'giftingCostPerCreatorGbp', 'giftedPostingRate', 'boostingCostPer1000Usd', 'paidMediaFee',
   'firstOfferShare', 'minimumBudgetGbp', 'marginWarning', 'balancedSizeBonus', 'balancedCreatorBonus',
+  'guaranteeMinSample', 'paidUsageUplift',
 ];
+// Settings that are small tables of numbers (merged key by key).
+const PERSONAL_TABLES = ['boostingCpmUsd', 'usageRightsUplift', 'exclusivityUplift'];
 
 async function calcContext(inputs = {}) {
   const [settings, rates, fx] = await Promise.all([getSettings(), getRates(), getFx()]);
@@ -150,6 +158,13 @@ async function calcContext(inputs = {}) {
   for (const k of PERSONAL_SETTINGS) {
     const v = inputs?.settings?.[k];
     if (v !== undefined && v !== null && v !== '' && !Number.isNaN(Number(v))) own[k] = Number(v);
+  }
+  if (inputs?.settings?.paidMediaFeeType) own.paidMediaFeeType = inputs.settings.paidMediaFeeType === 'fixed' ? 'fixed' : 'percent';
+  for (const k of PERSONAL_TABLES) {
+    const t = inputs?.settings?.[k];
+    if (!t || typeof t !== 'object') continue;
+    own[k] = { ...settings[k] };
+    for (const [key, v] of Object.entries(t)) if (v !== null && v !== '' && !Number.isNaN(Number(v))) own[k][key] = Number(v);
   }
   return { ctx: { archetypes: rates.archetypes, factors: rates.factors, settings: { ...settings, ...own }, fx: fx.rates }, buildId: rates.build.id };
 }
@@ -194,9 +209,11 @@ function packageColumns(result, kind) {
     views_expected: i.viewsExpected,
     creator_money: i.creatorMoney,
     creator_money_allocated: i.creatorMoneyAllocated,
-    expected_margin: i.expectedMargin,
-    agreed_price: i.agreedPrice,
-    real_margin: i.realMargin,
+    // Standard vs final quote, adjustment reason/context and low/likely/high views
+    // are kept in result.internal; these columns hold the headline figures.
+    expected_margin: i.standardMargin,
+    agreed_price: i.adjusted ? i.finalPrice : null,
+    real_margin: i.expectedMargin,
   };
 }
 

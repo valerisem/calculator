@@ -129,8 +129,8 @@ export async function getDeal(id) {
 /** Writes the approved package back to the deal: value, custom fields and a note. */
 export async function syncApprovedPackage(dealId, pkg, fxPerGbp) {
   const r = pkg.result;
-  const price = pkg.agreed_price ?? r.client.price;
-  const margin = pkg.real_margin ?? r.internal.expectedMargin;
+  const price = r.client.price; // final quote, after any commercial adjustment
+  const margin = r.internal.expectedMargin; // effective margin at that price
   const f = config.pdFields;
   const body = {
     value: price,
@@ -138,8 +138,9 @@ export async function syncApprovedPackage(dealId, pkg, fxPerGbp) {
     [f.projectedMargin]: Math.round(margin * 1000) / 10,
     [f.numberOfInfluencers]: r.client.totalCreators + r.client.giftedCreators,
   };
-  if (r.inputs.paidMedia) {
-    body[f.paidMediaSpend] = r.inputs.paidMedia;
+  const media = typeof r.inputs.paidMedia === 'object' ? r.inputs.paidMedia.spend : r.inputs.paidMedia;
+  if (media) {
+    body[f.paidMediaSpend] = media;
     body[`${f.paidMediaSpend}_currency`] = r.currency;
   }
   if (r.inputs.otherCosts) {
@@ -155,9 +156,14 @@ export async function syncApprovedPackage(dealId, pkg, fxPerGbp) {
   const content = [
     `<b>Approved package: ${escapeHtml(pkg.name)}</b>`,
     `<p>${escapeHtml([r.inputs.campaign, (r.inputs.platforms || []).join(' & '), (r.inputs.markets || []).join(', '), r.inputs.niche].filter(Boolean).join(' · '))}</p>
-    <p>Price: ${r.currency} ${fmt(price)} · Margin: ${(margin * 100).toFixed(1)}%</p>`,
+    <p>Price: ${r.currency} ${fmt(price)} · Margin: ${(margin * 100).toFixed(1)}%` +
+      (r.internal.adjusted
+        ? ` · Standard quote ${r.currency} ${fmt(r.internal.standardPrice)} (${r.internal.adjustmentPct > 0 ? '+' : ''}${r.internal.adjustmentPct.toFixed(1)}%${r.internal.commercial?.reason ? `, ${escapeHtml(r.internal.commercial.reason)}` : ''})`
+        : '') +
+      '</p>',
     `<ul>${lines}</ul>`,
-    `<p>${fmt(r.client.totalVideos)} videos · ${fmt(r.client.viewsPromised)} views promised · ${fmt(r.client.reachPromised)} reach` +
+    `<p>Guaranteed views by tier: ${(r.client.tierGuarantees || []).map((t) => `${t.tier} ${fmt(t.guaranteedViews)}`).join(' · ')}</p>`,
+    `<p>${fmt(r.client.totalVideos)} videos · ${fmt(r.client.viewsPromised)} guaranteed views overall` +
       (r.client.giftedCreators ? ` · ${r.client.giftedCreators} gifted creators` : '') +
       (r.client.boostedViews ? ` · ${fmt(r.client.boostedViews)} boosted views (separate)` : '') +
       '</p>',

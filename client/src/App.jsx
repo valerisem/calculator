@@ -54,6 +54,7 @@ export default function App() {
         <Proposal
           key={view.key}
           proposalId={view.id}
+          meta={meta}
           settings={meta.settings}
           onDefaultsSaved={loadMeta}
           onBack={() => go({ name: 'proposals' })}
