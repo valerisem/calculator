@@ -9,7 +9,15 @@ export default function App() {
   const [error, setError] = useState(null);
   const [view, setView] = useState({ name: 'calculator', key: 0 });
 
-  const loadMeta = () => api('/meta').then(setMeta).catch((e) => setError(e.result?.code === 'restricted' || e.status === 401 ? 'restricted' : e.message));
+  const loadMeta = () =>
+    api('/meta')
+      .then((m) => {
+        setMeta(m);
+        setError(null);
+      })
+      .catch((e) =>
+        setError(e.result?.code === 'restricted' || e.status === 401 ? 'restricted' : e.name === 'AbortError' ? 'The calculator server is not answering.' : e.message),
+      );
   useEffect(() => {
     loadMeta();
   }, []);
@@ -23,7 +31,14 @@ export default function App() {
       </div>
     );
   }
-  if (error) return <div className="page"><div className="error-box">{error}</div></div>;
+  if (error && !meta) {
+    return (
+      <div className="page">
+        <div className="error-box">{error}</div>
+        <button className="ghost" style={{ marginTop: 12 }} onClick={() => { setError(null); loadMeta(); }}>Retry</button>
+      </div>
+    );
+  }
   if (!meta) return <div className="page muted">Loading…</div>;
 
   const go = (v) => setView({ ...v, key: Date.now() });

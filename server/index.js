@@ -400,6 +400,7 @@ app.use((err, _req, res, _next) => {
 
 app.listen(config.port, async () => {
   console.log(`Package calculator listening on ${config.port}`);
+  getFx().catch((e) => console.warn('FX warm-up failed:', e.message));
   await pipedrive.loadCompanyDomain();
   if (supabase) {
     try {
