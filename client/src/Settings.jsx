@@ -8,20 +8,23 @@ const pct = (x) => `${Math.round(Number(x) * 1000) / 10}%`;
 // [key, label, type, sub-key for settings that are small tables]
 export const PERSONAL_GROUPS = [
   ['General', [
-    ['giftedPostingRate', 'Default gifted creator posting rate (%)', 'percent'],
-    ['firstOfferShare', 'First offer, share of typical fee (%)', 'percent'],
+    ['firstOfferShare', 'First offer, share of cost per video (%)', 'percent'],
     ['marginWarning', 'Warn when margin is below (%)', 'percent'],
-    ['minimumBudgetGbp', 'Warn when budget is below (£)', 'number'],
     ['guaranteeMinSample', 'Min. records for a guarantee', 'number'],
   ]],
+  // The creator rate card renders here, after General.
   ['Boosting CPM ($ per 1,000 views)', [
     ['boostingCpmUsd', 'TikTok', 'number', 'TikTok'],
     ['boostingCpmUsd', 'Instagram', 'number', 'Instagram'],
     ['boostingCpmUsd', 'YouTube', 'number', 'YouTube'],
     ['boostingCpmUsd', 'Other', 'number', 'Other'],
-    ['paidMediaFee', 'Default paid media fee (%)', 'number'],
+  ]],
+  ['Paid media', [
+    ['paidMediaFee', 'Default management fee (%)', 'number'],
   ]],
 ];
+// Gifting's posting rate (50%) stays a background default; it is edited per
+// proposal in Add-ons when gifting is switched on.
 export const PERSONAL_FIELDS = PERSONAL_GROUPS.flatMap(([, f]) => f);
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -63,27 +66,29 @@ export function SettingsPanel({ meta, inputs, defaults, values, onChange, onDefa
       <button className="strip-head" onClick={() => setOpen(!open)}>
         <span className="strip-title">Settings</span>
         <span className="strip-summary">
-          Gifted posting {pct(v.giftedPostingRate)} · Boosting CPM TikTok ${v.boostingCpmUsd?.TikTok} · Meta ${v.boostingCpmUsd?.Instagram} · Paid media fee {v.paidMediaFee}% · First offer {pct(v.firstOfferShare)}
+          First offer {pct(v.firstOfferShare)} · Margin warning {pct(v.marginWarning)} · Boosting CPM TikTok ${v.boostingCpmUsd?.TikTok} · Meta ${v.boostingCpmUsd?.Instagram} · Paid media fee {v.paidMediaFee}%
           {changed.length > 0 && <em> · {changed.length} changed</em>}
         </span>
         <span className="strip-toggle">{open ? '−' : '+'}</span>
       </button>
       {open && (
         <div className="strip-body">
-          {PERSONAL_GROUPS.map(([title, fields]) => (
-            <div key={title}>
-              <div className="strip-group">{title}</div>
-              <div className="strip-grid">
-                {fields.map(([key, label, type, sub]) => (
-                  <label className="field" key={key + (sub || '')}>
-                    <span>{label}</span>
-                    <input className="line" type="number" step="any" value={show(key, type, sub)} onChange={set(key, type, sub)} />
-                  </label>
-                ))}
+          {PERSONAL_GROUPS.map(([title, fields], gi) => (
+            <React.Fragment key={title}>
+              <div>
+                <div className="strip-group">{title}</div>
+                <div className="strip-grid">
+                  {fields.map(([key, label, type, sub]) => (
+                    <label className="field" key={key + (sub || '')}>
+                      <span>{label}</span>
+                      <input className="line" type="number" step="any" value={show(key, type, sub)} onChange={set(key, type, sub)} />
+                    </label>
+                  ))}
+                </div>
               </div>
-            </div>
+              {gi === 0 && <RateCard meta={meta} inputs={inputs} onSaved={onRatesSaved} />}
+            </React.Fragment>
           ))}
-          <RateCard meta={meta} inputs={inputs} onSaved={onRatesSaved} />
           <div className="strip-actions">
             <button className="text-link" onClick={() => setHow(!how)}>{how ? 'Hide' : 'How it’s calculated'}</button>
             {changed.length > 0 && <button className="ghost" onClick={() => onChange({})}>Reset to defaults</button>}
