@@ -8,7 +8,7 @@ import { ADJUSTMENT_REASONS, BOOST_PLATFORMS, EXCLUSIVITY, PRICING_CONTEXTS, USA
 import { OBJECTIVES, PLATFORMS, SIZE_BANDS } from './engine/constants.js';
 import { CURRENCIES, getFx } from './fx.js';
 import * as pipedrive from './pipedrive.js';
-import { buildSlide } from './slide.js';
+import { OUTPUTS, buildDeck } from './deck.js';
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -51,6 +51,7 @@ api.get('/meta', wrap(async (_req, res) => {
     platforms: PLATFORMS,
     objectives: OBJECTIVES,
     currencies: CURRENCIES,
+    deckOutputs: Object.entries(OUTPUTS).map(([key, o]) => ({ key, label: o.label })),
     usageRights: USAGE_RIGHTS,
     exclusivity: EXCLUSIVITY,
     boostPlatforms: BOOST_PLATFORMS,
@@ -371,19 +372,15 @@ async function sendSlide(packageId, actor, res) {
   const settings = await getSettings();
   const options = {
     theme: settings.slideTheme,
-    part: settings.slidePart,
-    subtitle: settings.slideSubtitle,
+    output: 'pricing',
     badge: settings.slideBadge,
-    extraLines: settings.slideExtraLines,
     salesNote: settings.slideSalesNote,
-    oneLine: '',
-    estimatedSales: '',
     ...(pkg.slide_options || {}),
   };
-  const { buffer, fileName } = await buildSlide({ proposal, pkg, options });
+  const { buffer, fileName, contentType } = await buildDeck({ proposal, pkg, options });
   await must(db().from('pc_slides').insert({ package_id: pkg.id, file_name: fileName, created_by: actor, options }));
-  await logEvent({ proposalId: proposal.id, packageId: pkg.id, action: 'slide_generated', actor });
-  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+  await logEvent({ proposalId: proposal.id, packageId: pkg.id, action: 'slide_generated', actor, payload: { output: options.output, theme: options.theme } });
+  res.setHeader('Content-Type', contentType);
   res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
   res.send(buffer);
 }

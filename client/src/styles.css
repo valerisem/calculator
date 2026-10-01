@@ -249,3 +249,8 @@ textarea.line { resize: vertical; font: inherit; font-size: 15px; }
 .review { display: flex; flex-direction: column; gap: 14px; border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; }
 .uplift { display: flex; flex-direction: column; gap: 6px; background: var(--panel); border-radius: 10px; padding: 12px 14px; }
 .line.missing { border-bottom-color: var(--pink); }
+
+.output-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.output { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); background: var(--white); border-radius: 10px; padding: 10px 12px; text-align: left; font-weight: 500; color: var(--ink); }
+.output.on { border-color: var(--pink); box-shadow: 0 0 0 1px var(--pink); }
+.output .radio { width: 18px; height: 18px; }

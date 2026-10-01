@@ -95,7 +95,7 @@ export default function Proposal({ proposalId, meta, settings, onBack, onEdit, o
               <button className="ghost danger" disabled={busy} onClick={remove}>Delete</button>
             </div>
             <div className="dash" />
-            <SlideBox pkg={pkg} settings={settings} busy={busy} onError={setError} onDefaultsSaved={onDefaultsSaved} />
+            <SlideBox pkg={pkg} settings={settings} outputs={meta.deckOutputs} busy={busy} onError={setError} onDefaultsSaved={onDefaultsSaved} />
           </>
         ) : (
           <p className="muted">No packages saved yet.</p>

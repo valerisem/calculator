@@ -459,7 +459,7 @@ export default function Calculator({ meta, initialInputs, editing, onSaved, onOp
           ) : (
             <>
               <button className="ghost" disabled={busy || !selectedCard} onClick={() => save(deal, { slide: true })}>
-                Download slide
+                Download pricing slides
               </button>
               <button className="cta" disabled={busy || !savable.length} onClick={() => save(deal)}>
                 Create proposal <span>›</span>
